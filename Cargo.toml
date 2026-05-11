@@ -13,3 +13,14 @@ keywords = ["filter", "network", "packet", "sniffer", "gui"]
 categories = ["visualization", "gui", "network-programming"]
 
 [dependencies]
+clap = { version = "4.5", features = ["derive"] }
+ctrlc = "3.4"
+etherparse = "0.20.1"
+pcap = "2.4.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
