@@ -64,7 +64,7 @@ fn main() -> ExitCode {
         let cap_args = args.clone();
         std::thread::Builder::new()
             .name("capture".into())
-            .spawn(move || capture::run(cap_args, table, shutdown))
+            .spawn(move || capture::run(cap_args, collector_addr, table, shutdown))
     };
 
     let capture_handle = match capture_handle {
