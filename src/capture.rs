@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use etherparse::{LaxPacketHeaders, LinkHeader, NetHeaders, TransportHeader};
+use etherparse::{EtherType, LaxPacketHeaders, LinkHeader, NetHeaders, TransportHeader};
 use pcap::{Active, Capture, Linktype};
 use tracing::{debug, error, info, warn};
 
@@ -33,19 +33,22 @@ pub fn run(
     };
 
     let link_type = cap.get_datalink();
-    let is_ethernet = link_type == Linktype::ETHERNET;
-    if !is_ethernet {
+    if !link_type_is_supported(link_type) {
         warn!(
-            "interface '{}' has non-Ethernet link type ({:?}); MAC fields will be zero",
+            "interface '{}' has link type {:?} which is not specifically handled; \
+             falling back to Ethernet decode",
             args.interface, link_type
         );
     }
-    info!(interface = %args.interface, "capture started");
+    if !link_type_has_macs(link_type) {
+        debug!("link type {:?} carries no MAC addresses", link_type);
+    }
+    info!(interface = %args.interface, ?link_type, "capture started");
 
     while !shutdown.load(Ordering::SeqCst) {
         match cap.next_packet() {
             Ok(packet) => {
-                if let Some(d) = decode_packet(packet.data, is_ethernet) {
+                if let Some(d) = decode_packet(packet.data, link_type) {
                     table.record(d.key, d.bytes, d.src_mac, d.dst_mac, Instant::now());
                 }
             }
@@ -62,18 +65,92 @@ pub fn run(
     info!("capture stopped");
 }
 
+fn link_type_is_supported(lt: Linktype) -> bool {
+    matches!(
+        lt,
+        Linktype::ETHERNET
+            | Linktype::NULL
+            | Linktype::LOOP
+            | Linktype::IPV4
+            | Linktype::IPV6
+            | Linktype::LINUX_SLL
+            | Linktype::LINUX_SLL2
+            | Linktype(12) // DLT_RAW
+    )
+}
+
+fn link_type_has_macs(lt: Linktype) -> bool {
+    lt == Linktype::ETHERNET
+}
+
 fn open_capture(args: &Args, collector: SocketAddr) -> Result<Capture<Active>, pcap::Error> {
+    // pcap setup mirrors Sniffnet's live capture (capture_context.rs): buffered
+    // mode + a 2 MB ring buffer trades sub-millisecond latency for throughput,
+    // which is what we want for a 900 ms aggregation window.
     let mut cap = Capture::from_device(args.interface.as_str())?
-        .snaplen(args.snaplen)
         .promisc(args.promiscuous)
-        .immediate_mode(true)
-        .timeout(200)
+        .buffer_size(2_000_000)
+        .snaplen(args.snaplen)
+        .immediate_mode(false)
+        .timeout(150)
         .open()?;
     // Filter out our own outgoing IPFIX exports so they don't loop back into the
     // flow table and pollute Sniffnet with phantom self-traffic.
     let filter = self_export_filter(collector);
     cap.filter(&filter, true)?;
     Ok(cap)
+}
+
+/// Dispatch decoding based on pcap link type. Mirrors Sniffnet's
+/// `parse_packets::get_sniffable_headers`.
+fn parse_by_link_type(data: &[u8], link_type: Linktype) -> Option<LaxPacketHeaders<'_>> {
+    match link_type {
+        Linktype::ETHERNET => LaxPacketHeaders::from_ethernet(data).ok(),
+        Linktype::NULL | Linktype::LOOP => from_null(data),
+        Linktype::LINUX_SLL => from_linux_sll(data, true),
+        Linktype::LINUX_SLL2 => from_linux_sll(data, false),
+        // DLT_RAW (12) — raw IP packets with no link layer.
+        Linktype::IPV4 | Linktype::IPV6 | Linktype(12) => LaxPacketHeaders::from_ip(data).ok(),
+        // Forgiving default for unknown link types: try Ethernet, same as Sniffnet.
+        _ => LaxPacketHeaders::from_ethernet(data).ok(),
+    }
+}
+
+/// BSD/macOS loopback (DLT_NULL/DLT_LOOP): 4-byte address-family prefix then IP.
+/// AF values vary by platform and endianness; cf. Sniffnet's `from_null` and
+/// https://wiki.wireshark.org/NullLoopback.md
+fn from_null(packet: &[u8]) -> Option<LaxPacketHeaders<'_>> {
+    if packet.len() <= 4 {
+        return None;
+    }
+    fn matches(value: u32) -> bool {
+        // 2 = IPv4 (all platforms); 24, 28, 30 = IPv6 (platform-dependent).
+        matches!(value, 2 | 24 | 28 | 30)
+    }
+    let h = [packet[0], packet[1], packet[2], packet[3]];
+    if matches(u32::from_le_bytes(h)) || matches(u32::from_be_bytes(h)) {
+        LaxPacketHeaders::from_ip(&packet[4..]).ok()
+    } else {
+        None
+    }
+}
+
+/// Linux cooked capture (SLL v1 = 16 bytes, SLL2 = 20 bytes). Reads the
+/// EtherType from the cooked header and hands the payload to etherparse.
+fn from_linux_sll(packet: &[u8], is_v1: bool) -> Option<LaxPacketHeaders<'_>> {
+    let header_len = if is_v1 { 16 } else { 20 };
+    if packet.len() <= header_len {
+        return None;
+    }
+    let protocol_type = u16::from_be_bytes(if is_v1 {
+        [packet[14], packet[15]]
+    } else {
+        [packet[0], packet[1]]
+    });
+    Some(LaxPacketHeaders::from_ether_type(
+        EtherType(protocol_type),
+        &packet[header_len..],
+    ))
 }
 
 fn self_export_filter(collector: SocketAddr) -> String {
@@ -89,14 +166,10 @@ fn self_export_filter(collector: SocketAddr) -> String {
     )
 }
 
-fn decode_packet(data: &[u8], is_ethernet: bool) -> Option<Decoded> {
+fn decode_packet(data: &[u8], link_type: Linktype) -> Option<Decoded> {
     // LaxPacketHeaders tolerates payloads truncated by snaplen, unlike SlicedPacket
     // which rejects any IP datagram whose `total_len` exceeds the captured slice.
-    let parsed = if is_ethernet {
-        LaxPacketHeaders::from_ethernet(data).ok()?
-    } else {
-        LaxPacketHeaders::from_ip(data).ok()?
-    };
+    let parsed = parse_by_link_type(data, link_type)?;
 
     let (src_mac, dst_mac) = match parsed.link {
         Some(LinkHeader::Ethernet2(eth)) => (Some(eth.source), Some(eth.destination)),

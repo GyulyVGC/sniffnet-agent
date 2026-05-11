@@ -28,9 +28,10 @@ pub struct Args {
     #[arg(long, default_value_t = 300)]
     pub idle_evict_secs: u64,
 
-    /// pcap snapshot length (bytes per packet). Enough for L2+L3+L4 headers with
-    /// options; we only need headers, never payload.
-    #[arg(long, default_value_t = 256)]
+    /// pcap snapshot length (bytes per packet). Matches Sniffnet's default; we
+    /// only need headers, and a smaller snaplen lets more packets sit in the
+    /// kernel ring buffer.
+    #[arg(long, default_value_t = 200)]
     pub snaplen: i32,
 
     /// Target maximum UDP datagram size in bytes (avoid IP fragmentation).
