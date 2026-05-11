@@ -1,0 +1,15 @@
+[package]
+name = "sniffnet-agent"
+version = "0.0.0"
+authors = ["Giuliano Bellini <gyulyvgc99@gmail.com>"]
+edition = "2024"
+description = "Lightweight network flows exporter for Sniffnet"
+readme = "README.md"
+homepage = "https://sniffnet.net"
+repository = "https://github.com/GyulyVGC/sniffnet-agent"
+documentation = "https://github.com/GyulyVGC/sniffnet/wiki"
+license = "MIT OR Apache-2.0"
+keywords = ["filter", "network", "packet", "sniffer", "gui"]
+categories = ["visualization", "gui", "network-programming"]
+
+[dependencies]

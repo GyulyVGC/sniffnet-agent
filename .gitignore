@@ -1,0 +1,63 @@
+# Created with the help of https://www.toptal.com/developers/gitignore/api/rust,clion,windows,osx,linux,macos
+
+### CLion ###
+.idea/
+cmake-build-*/
+*.iws
+out/
+
+### Linux ###
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+### macOS ###
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+*.icloud
+
+### Rust ###
+debug/
+target/
+**/*.rs.bk
+*.pdb
+
+### Windows ###
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+### Custom... ###
+lcov.info
+*.pcap
+node_modules
+package.json
+yarn.lock
+*.bkp
