@@ -16,10 +16,9 @@
 use std::net::IpAddr;
 
 use crate::flow::{FlowKey, FlowSnapshot};
-use crate::ipfix::template::{TEMPLATE_SET_LEN, write_template_set};
+use crate::ipfix::template::write_template_set;
 use crate::ipfix::{
-    MSG_HEADER_LEN, RECORD_SIZE_V4, RECORD_SIZE_V6, SET_HEADER_LEN, TEMPLATE_ID_V4, TEMPLATE_ID_V6,
-    VERSION,
+    RECORD_SIZE_V4, RECORD_SIZE_V6, SET_HEADER_LEN, TEMPLATE_ID_V4, TEMPLATE_ID_V6, VERSION,
 };
 
 /// Encode `snapshots` into one or more UDP-ready datagrams.
@@ -28,16 +27,11 @@ use crate::ipfix::{
 /// caller should persist as the starting point for the next call.
 pub fn build_datagrams(
     snapshots: &[(FlowKey, FlowSnapshot)],
-    odid: u32,
     seq_start: u32,
-    mtu: usize,
     mut include_template_set: bool,
     now_unix: u32,
 ) -> (Vec<Vec<u8>>, u32) {
-    // Minimum viable datagram = header + one data set header + one v4 record.
-    // If the user picked a smaller MTU we'd loop forever; refuse politely.
-    let min_mtu = MSG_HEADER_LEN + SET_HEADER_LEN + RECORD_SIZE_V4;
-    assert!(mtu >= min_mtu, "mtu must be at least {min_mtu} bytes");
+    let mtu: usize = 1400;
 
     let mut v4: Vec<&(FlowKey, FlowSnapshot)> = Vec::new();
     let mut v6: Vec<&(FlowKey, FlowSnapshot)> = Vec::new();
@@ -61,16 +55,9 @@ pub fn build_datagrams(
         buf.extend_from_slice(&[0u8, 0u8]); // length placeholder
         buf.extend_from_slice(&now_unix.to_be_bytes());
         buf.extend_from_slice(&seq.to_be_bytes());
-        buf.extend_from_slice(&odid.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
 
         if include_template_set {
-            // Must fit; the assert above guarantees mtu room for header + template + data set.
-            if buf.len() + TEMPLATE_SET_LEN + SET_HEADER_LEN + RECORD_SIZE_V4.min(RECORD_SIZE_V6)
-                > mtu
-            {
-                // MTU too small to carry templates plus any record; bail.
-                panic!("mtu too small to carry template set");
-            }
             write_template_set(&mut buf);
             include_template_set = false;
         }
@@ -107,11 +94,7 @@ pub fn build_datagrams(
             }
         }
 
-        if records_in_msg == 0 {
-            // No room for any record. With the min_mtu assertion this only happens
-            // if templates + headers ate everything — guard against an infinite loop.
-            panic!("encoder made no forward progress; mtu too small");
-        }
+        debug_assert!(records_in_msg > 0, "encoder made no forward progress");
 
         // Back-patch message length (offsets 2..4).
         let total_len = u16::try_from(buf.len()).expect("datagram exceeds u16 length");
@@ -223,7 +206,7 @@ mod tests {
 
     #[test]
     fn empty_snapshots_produces_no_datagrams() {
-        let (out, seq) = build_datagrams(&[], 1, 0, 1400, false, 12345);
+        let (out, seq) = build_datagrams(&[], 0, false, 12345);
         assert!(out.is_empty());
         assert_eq!(seq, 0);
     }
@@ -231,7 +214,7 @@ mod tests {
     #[test]
     fn header_layout_is_exact() {
         let s = [v4_snap(1, 2, 100, 5)];
-        let (out, _) = build_datagrams(&s, 0xCAFEF00D, 0x1122_3344, 1400, false, 0xDEADBEEF);
+        let (out, _) = build_datagrams(&s, 0x1122_3344, false, 0xDEADBEEF);
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         assert_eq!(dg[0..2], 0x000Au16.to_be_bytes(), "version");
@@ -239,7 +222,7 @@ mod tests {
         assert_eq!(u16::from_be_bytes([dg[2], dg[3]]), 61);
         assert_eq!(dg[4..8], 0xDEADBEEFu32.to_be_bytes(), "export_time");
         assert_eq!(dg[8..12], 0x1122_3344u32.to_be_bytes(), "sequence");
-        assert_eq!(dg[12..16], 0xCAFEF00Du32.to_be_bytes(), "odid");
+        assert_eq!(dg[12..16], 0u32.to_be_bytes(), "odid");
     }
 
     #[test]
@@ -247,7 +230,7 @@ mod tests {
         let snaps: Vec<_> = (0..50)
             .map(|i| v4_snap(i as u8, (i + 1) as u8, 100, 1))
             .collect();
-        let (out, _) = build_datagrams(&snaps, 1, 0, 600, true, 0);
+        let (out, _) = build_datagrams(&snaps, 0, true, 0);
         assert!(out.len() >= 2);
         // first datagram should contain template set id (2) right after header
         let first_set_id = u16::from_be_bytes([out[0][16], out[0][17]]);
@@ -272,7 +255,7 @@ mod tests {
             src_mac: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
             dst_mac: [0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC],
         };
-        let (out, _) = build_datagrams(&[(key, snap)], 1, 0, 1400, false, 0);
+        let (out, _) = build_datagrams(&[(key, snap)], 0, false, 0);
         let dg = &out[0];
         // Skip 16B header + 4B data set header = 20B prefix.
         let rec = &dg[20..20 + RECORD_SIZE_V4];
@@ -293,42 +276,38 @@ mod tests {
     #[test]
     fn sequence_number_advances_by_record_count() {
         let snaps = vec![v4_snap(1, 2, 100, 1), v4_snap(3, 4, 200, 1)];
-        let (_, seq) = build_datagrams(&snaps, 1, 100, 1400, false, 0);
+        let (_, seq) = build_datagrams(&snaps, 100, false, 0);
         assert_eq!(seq, 102);
     }
 
     #[test]
     fn sequence_number_carries_across_messages() {
-        // Force two datagrams: tight MTU.
-        let snaps: Vec<_> = (0..5)
-            .map(|i| v4_snap(i as u8, (i + 1) as u8, 100, 1))
+        // At mtu=1400 a no-template datagram fits floor((1400 - 16 - 4) / 41) = 33 v4
+        // records. 67 records therefore splits into 33 + 33 + 1 across three datagrams.
+        let snaps: Vec<_> = (0..67)
+            .map(|i| v4_snap((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
-        // mtu = 16 (hdr) + 4 (set hdr) + 2*41 (records) = 102 → exactly 2 records per datagram
-        let (out, seq) = build_datagrams(&snaps, 1, 0, 102, false, 0);
-        assert_eq!(out.len(), 3); // 2+2+1
-        // First datagram's seq field = 0
+        let (out, seq) = build_datagrams(&snaps, 0, false, 0);
+        assert_eq!(out.len(), 3);
         assert_eq!(
             u32::from_be_bytes([out[0][8], out[0][9], out[0][10], out[0][11]]),
             0
         );
-        // Second datagram's seq field = 2
         assert_eq!(
             u32::from_be_bytes([out[1][8], out[1][9], out[1][10], out[1][11]]),
-            2
+            33
         );
-        // Third datagram's seq field = 4
         assert_eq!(
             u32::from_be_bytes([out[2][8], out[2][9], out[2][10], out[2][11]]),
-            4
+            66
         );
-        // Final returned seq = 5
-        assert_eq!(seq, 5);
+        assert_eq!(seq, 67);
     }
 
     #[test]
     fn sequence_number_wraps_modulo_2_32() {
         let snaps = vec![v4_snap(1, 2, 100, 1), v4_snap(3, 4, 100, 1)];
-        let (_, seq) = build_datagrams(&snaps, 1, u32::MAX - 1, 1400, false, 0);
+        let (_, seq) = build_datagrams(&snaps, u32::MAX - 1, false, 0);
         assert_eq!(seq, 0);
     }
 
@@ -337,7 +316,7 @@ mod tests {
         let snaps: Vec<_> = (0..200)
             .map(|i| v4_snap((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
-        let (out, seq) = build_datagrams(&snaps, 1, 0, 1400, false, 0);
+        let (out, seq) = build_datagrams(&snaps, 0, false, 0);
         assert_eq!(seq, 200);
         // Sum the records reported in each datagram's message length.
         let mut total_records = 0u32;
@@ -355,7 +334,7 @@ mod tests {
     #[test]
     fn v4_and_v6_share_a_datagram_when_room_allows() {
         let snaps = vec![v4_snap(1, 2, 100, 1), v6_snap(200, 2)];
-        let (out, _) = build_datagrams(&snaps, 1, 0, 1400, false, 0);
+        let (out, _) = build_datagrams(&snaps, 0, false, 0);
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         // After 16B header: v4 data set (4 + 41 = 45B) then v6 data set (4 + 65 = 69B)
@@ -373,8 +352,8 @@ mod tests {
     #[test]
     fn include_template_set_flag_drives_first_datagram_layout() {
         let snaps = [v4_snap(1, 2, 100, 1)];
-        let (with, _) = build_datagrams(&snaps, 1, 0, 1400, true, 0);
-        let (without, _) = build_datagrams(&snaps, 1, 0, 1400, false, 0);
+        let (with, _) = build_datagrams(&snaps, 0, true, 0);
+        let (without, _) = build_datagrams(&snaps, 0, false, 0);
         // With template, the first set is the template set (id=2)
         let with_id = u16::from_be_bytes([with[0][16], with[0][17]]);
         let without_id = u16::from_be_bytes([without[0][16], without[0][17]]);

@@ -14,8 +14,5 @@ pub const RECORD_SIZE_V4: usize = 41;
 /// 16 + 16 + 2 + 2 + 1 + 6 + 6 + 8 + 8 = 65
 pub const RECORD_SIZE_V6: usize = 65;
 
-/// IPFIX message header length per RFC 7011 §3.1.
-pub const MSG_HEADER_LEN: usize = 16;
-
 /// Set header length per RFC 7011 §3.3.
 pub const SET_HEADER_LEN: usize = 4;

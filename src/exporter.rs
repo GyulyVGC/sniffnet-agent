@@ -11,18 +11,10 @@ pub struct Exporter {
     sock: UdpSocket,
     seq: u32,
     last_template_send: Option<Instant>,
-    template_refresh: Duration,
-    odid: u32,
-    mtu: usize,
 }
 
 impl Exporter {
-    pub fn connect(
-        addr: SocketAddr,
-        odid: u32,
-        template_refresh: Duration,
-        mtu: usize,
-    ) -> io::Result<Self> {
+    pub fn connect(addr: SocketAddr) -> io::Result<Self> {
         let bind_addr: SocketAddr = match addr {
             SocketAddr::V4(_) => "0.0.0.0:0".parse().unwrap(),
             SocketAddr::V6(_) => "[::]:0".parse().unwrap(),
@@ -33,9 +25,6 @@ impl Exporter {
             sock,
             seq: 0,
             last_template_send: None,
-            template_refresh,
-            odid,
-            mtu,
         })
     }
 
@@ -45,17 +34,11 @@ impl Exporter {
         }
         let include_template_set = match self.last_template_send {
             None => true,
-            Some(t) => t.elapsed() >= self.template_refresh,
+            Some(t) => t.elapsed() >= Duration::from_secs(30),
         };
         let now_unix = unix_seconds();
-        let (datagrams, new_seq) = build_datagrams(
-            &snapshots,
-            self.odid,
-            self.seq,
-            self.mtu,
-            include_template_set,
-            now_unix,
-        );
+        let (datagrams, new_seq) =
+            build_datagrams(&snapshots, self.seq, include_template_set, now_unix);
         if include_template_set {
             self.last_template_send = Some(Instant::now());
         }
@@ -116,7 +99,7 @@ mod tests {
         recv.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
         let recv_addr = recv.local_addr().unwrap();
 
-        let mut exp = Exporter::connect(recv_addr, 7, Duration::from_secs(60), 1400).unwrap();
+        let mut exp = Exporter::connect(recv_addr).unwrap();
         exp.flush(vec![flow(1)]).unwrap();
 
         let mut buf = [0u8; 2048];
@@ -139,9 +122,7 @@ mod tests {
         let recv = UdpSocket::bind("127.0.0.1:0").unwrap();
         recv.set_read_timeout(Some(Duration::from_millis(50)))
             .unwrap();
-        let mut exp =
-            Exporter::connect(recv.local_addr().unwrap(), 1, Duration::from_secs(60), 1400)
-                .unwrap();
+        let mut exp = Exporter::connect(recv.local_addr().unwrap()).unwrap();
         exp.flush(vec![]).unwrap();
         let mut buf = [0u8; 64];
         assert!(recv.recv_from(&mut buf).is_err(), "no datagram expected");

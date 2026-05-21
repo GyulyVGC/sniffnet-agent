@@ -1,7 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 use etherparse::{EtherType, LaxPacketHeaders, LinkHeader, NetHeaders, TransportHeader};
 use pcap::{Active, Capture, Linktype};
@@ -49,7 +48,7 @@ pub fn run(
         match cap.next_packet() {
             Ok(packet) => {
                 if let Some(d) = decode_packet(packet.data, link_type) {
-                    table.record(d.key, d.bytes, d.src_mac, d.dst_mac, Instant::now());
+                    table.record(d.key, d.bytes, d.src_mac, d.dst_mac);
                 }
             }
             Err(pcap::Error::TimeoutExpired) => {}
@@ -88,9 +87,9 @@ fn open_capture(args: &Args, collector: SocketAddr) -> Result<Capture<Active>, p
     // mode + a 2 MB ring buffer trades sub-millisecond latency for throughput,
     // which is what we want for a 900 ms aggregation window.
     let mut cap = Capture::from_device(args.interface.as_str())?
-        .promisc(args.promiscuous)
+        .promisc(false)
         .buffer_size(2_000_000)
-        .snaplen(args.snaplen)
+        .snaplen(200)
         .immediate_mode(false)
         .timeout(150)
         .open()?;

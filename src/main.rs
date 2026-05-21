@@ -1,8 +1,9 @@
+// TODO: handle logging?
+
 mod capture;
 mod cli;
 mod exporter;
 mod flow;
-mod gc;
 mod ipfix;
 
 use clap::Parser;
@@ -32,7 +33,6 @@ fn main() -> ExitCode {
     info!(
         interface = %args.interface,
         collector = %collector_addr,
-        odid = args.observation_domain_id,
         "starting sniffnet-agent"
     );
 
@@ -45,12 +45,7 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let exporter = match Exporter::connect(
-        collector_addr,
-        args.observation_domain_id,
-        Duration::from_secs(args.template_refresh_secs),
-        args.mtu,
-    ) {
+    let exporter = match Exporter::connect(collector_addr) {
         Ok(e) => e,
         Err(e) => {
             error!("failed to bind UDP socket: {e}");
@@ -75,18 +70,8 @@ fn main() -> ExitCode {
         }
     };
 
-    let gc_handle = {
-        let table = table.clone();
-        let shutdown = shutdown.clone();
-        let max_idle = Duration::from_secs(args.idle_evict_secs);
-        std::thread::Builder::new()
-            .name("gc".into())
-            .spawn(move || gc::run(table, max_idle, shutdown))
-            .expect("spawn gc thread")
-    };
-
     // Flush loop runs on the main thread.
-    let flush_interval = Duration::from_millis(args.flush_interval_ms);
+    let flush_interval = Duration::from_millis(900);
     let mut exporter = exporter;
     while !shutdown.load(Ordering::SeqCst) {
         std::thread::sleep(flush_interval);
@@ -100,7 +85,6 @@ fn main() -> ExitCode {
     run_flush(&mut exporter, &table);
 
     let _ = capture_handle.join();
-    let _ = gc_handle.join();
 
     info!("shutdown complete");
     ExitCode::SUCCESS
