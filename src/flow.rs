@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,12 +66,19 @@ impl FlowTable {
             });
     }
 
-    /// Drain all entries from the table, returning a snapshot of each. The table
-    /// is empty after this call; flows still active will be re-inserted by the
-    /// capture thread when their next packet arrives.
-    pub fn drain_deltas(&self) -> Vec<(FlowKey, FlowSnapshot)> {
+    /// Drain all entries from the table, returning a snapshot of each. Flows
+    /// matching `(dst_ip, dst_port, UDP)` of `exclude` are dropped — used to
+    /// suppress the agent's own outbound IPFIX exports from the output. The
+    /// table is empty after this call; flows still active will be re-inserted
+    /// by the capture thread when their next packet arrives.
+    pub fn drain_deltas(&self, exclude: SocketAddr) -> Vec<(FlowKey, FlowSnapshot)> {
         let mut map = self.inner.lock().expect("flow table mutex poisoned");
         map.drain()
+            .filter(|(key, _)| {
+                !(key.protocol == 17
+                    && key.dst_ip == exclude.ip()
+                    && key.dst_port == exclude.port())
+            })
             .map(|(key, state)| {
                 (
                     key,
@@ -107,6 +114,8 @@ mod tests {
         }
     }
 
+    // Test flows are TCP (protocol 6); the exclude only fires on UDP, so any
+    // SocketAddr works as a no-op exclude.
     #[test]
     fn record_accumulates_deltas_and_packet_count() {
         let table = FlowTable::new();
@@ -114,7 +123,7 @@ mod tests {
         table.record(k, 100, Some([1; 6]), Some([2; 6]));
         table.record(k, 50, None, None);
 
-        let snap = table.drain_deltas();
+        let snap = table.drain_deltas(SocketAddr::from(([0, 0, 0, 0], 0)));
         assert_eq!(snap.len(), 1);
         let (got_key, state) = snap[0];
         assert_eq!(got_key, k);
@@ -130,11 +139,11 @@ mod tests {
         let k = key(1, 2);
         table.record(k, 100, None, None);
 
-        let first = table.drain_deltas();
+        let first = table.drain_deltas(SocketAddr::from(([0, 0, 0, 0], 0)));
         assert_eq!(first.len(), 1);
         assert_eq!(table.len(), 0, "drain must clear the table");
 
-        let second = table.drain_deltas();
+        let second = table.drain_deltas(SocketAddr::from(([0, 0, 0, 0], 0)));
         assert!(second.is_empty());
     }
 
@@ -143,10 +152,10 @@ mod tests {
         let table = FlowTable::new();
         table.record(key(1, 2), 100, None, None);
         table.record(key(3, 4), 200, None, None);
-        let _ = table.drain_deltas();
+        let _ = table.drain_deltas(SocketAddr::from(([0, 0, 0, 0], 0)));
         table.record(key(3, 4), 50, None, None);
 
-        let snap = table.drain_deltas();
+        let snap = table.drain_deltas(SocketAddr::from(([0, 0, 0, 0], 0)));
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].0, key(3, 4));
         assert_eq!(snap[0].1.bytes, 50);
@@ -158,8 +167,52 @@ mod tests {
         let k = key(1, 2);
         table.record(k, 100, Some([0xaa; 6]), Some([0xbb; 6]));
         table.record(k, 100, Some([0xcc; 6]), Some([0xdd; 6]));
-        let snap = table.drain_deltas();
+        let snap = table.drain_deltas(SocketAddr::from(([0, 0, 0, 0], 0)));
         assert_eq!(snap[0].1.src_mac, [0xaa; 6]);
         assert_eq!(snap[0].1.dst_mac, [0xbb; 6]);
+    }
+
+    #[test]
+    fn drain_excludes_only_udp_matching_collector() {
+        let table = FlowTable::new();
+        let collector_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let collector_port = 4739;
+        let exclude = SocketAddr::new(collector_ip, collector_port);
+
+        // self-export (UDP to collector) — must be dropped
+        let self_export = FlowKey {
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+            dst_ip: collector_ip,
+            src_port: 54321,
+            dst_port: collector_port,
+            protocol: 17,
+        };
+        // TCP to same dst:port — must be kept (different protocol)
+        let tcp_to_collector_port = FlowKey {
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 11)),
+            dst_ip: collector_ip,
+            src_port: 1000,
+            dst_port: collector_port,
+            protocol: 6,
+        };
+        // UDP to different dst — must be kept
+        let unrelated_udp = FlowKey {
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 12)),
+            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            src_port: 5000,
+            dst_port: 53,
+            protocol: 17,
+        };
+
+        table.record(self_export, 100, None, None);
+        table.record(tcp_to_collector_port, 200, None, None);
+        table.record(unrelated_udp, 300, None, None);
+
+        let snap = table.drain_deltas(exclude);
+        assert_eq!(snap.len(), 2);
+        let keys: std::collections::HashSet<_> = snap.iter().map(|(k, _)| *k).collect();
+        assert!(keys.contains(&tcp_to_collector_port));
+        assert!(keys.contains(&unrelated_udp));
+        assert!(!keys.contains(&self_export));
     }
 }

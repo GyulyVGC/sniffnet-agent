@@ -59,7 +59,7 @@ fn main() -> ExitCode {
         let cap_args = args.clone();
         std::thread::Builder::new()
             .name("capture".into())
-            .spawn(move || capture::run(cap_args, collector_addr, table, shutdown))
+            .spawn(move || capture::run(cap_args, table, shutdown))
     };
 
     let capture_handle = match capture_handle {
@@ -78,11 +78,11 @@ fn main() -> ExitCode {
         if shutdown.load(Ordering::SeqCst) {
             break;
         }
-        run_flush(&mut exporter, &table);
+        run_flush(&mut exporter, &table, collector_addr);
     }
 
     // Final flush before exit so the last window of deltas isn't lost.
-    run_flush(&mut exporter, &table);
+    run_flush(&mut exporter, &table, collector_addr);
 
     let _ = capture_handle.join();
 
@@ -90,8 +90,8 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_flush(exporter: &mut Exporter, table: &FlowTable) {
-    let snapshots = table.drain_deltas();
+fn run_flush(exporter: &mut Exporter, table: &FlowTable, collector: std::net::SocketAddr) {
+    let snapshots = table.drain_deltas(collector);
     if snapshots.is_empty() {
         return;
     }

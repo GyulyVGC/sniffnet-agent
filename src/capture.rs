@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -16,13 +16,8 @@ struct Decoded {
     dst_mac: Option<[u8; 6]>,
 }
 
-pub fn run(
-    args: Args,
-    collector_addr: SocketAddr,
-    table: Arc<FlowTable>,
-    shutdown: Arc<AtomicBool>,
-) {
-    let mut cap = match open_capture(&args, collector_addr) {
+pub fn run(args: Args, table: Arc<FlowTable>, shutdown: Arc<AtomicBool>) {
+    let mut cap = match open_capture(&args) {
         Ok(c) => c,
         Err(e) => {
             error!("failed to open capture on '{}': {e}", args.interface);
@@ -82,7 +77,7 @@ fn link_type_has_macs(lt: Linktype) -> bool {
     lt == Linktype::ETHERNET
 }
 
-fn open_capture(args: &Args, collector: SocketAddr) -> Result<Capture<Active>, pcap::Error> {
+fn open_capture(args: &Args) -> Result<Capture<Active>, pcap::Error> {
     // pcap setup mirrors Sniffnet's live capture (capture_context.rs): buffered
     // mode + a 2 MB ring buffer trades sub-millisecond latency for throughput,
     // which is what we want for a 900 ms aggregation window.
@@ -93,10 +88,14 @@ fn open_capture(args: &Args, collector: SocketAddr) -> Result<Capture<Active>, p
         .immediate_mode(false)
         .timeout(150)
         .open()?;
-    // Filter out our own outgoing IPFIX exports so they don't loop back into the
-    // flow table and pollute Sniffnet with phantom self-traffic.
-    let filter = self_export_filter(collector);
-    cap.filter(&filter, true)?;
+    if let Some(expr) = args
+        .filter
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+    {
+        cap.filter(expr, true)?;
+    }
     Ok(cap)
 }
 
@@ -150,19 +149,6 @@ fn from_linux_sll(packet: &[u8], is_v1: bool) -> Option<LaxPacketHeaders<'_>> {
         EtherType(protocol_type),
         &packet[header_len..],
     ))
-}
-
-fn self_export_filter(collector: SocketAddr) -> String {
-    // BPF "dst host" works for both IPv4 and IPv6 with modern libpcap; format
-    // IPv6 addresses without brackets, as BPF expects.
-    let host = match collector.ip() {
-        IpAddr::V4(v4) => v4.to_string(),
-        IpAddr::V6(v6) => v6.to_string(),
-    };
-    format!(
-        "not (udp and dst host {host} and dst port {})",
-        collector.port()
-    )
 }
 
 fn decode_packet(data: &[u8], link_type: Linktype) -> Option<Decoded> {

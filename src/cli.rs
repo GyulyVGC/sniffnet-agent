@@ -7,11 +7,12 @@ pub struct Args {
     /// Network interface to capture on (e.g. "en0", "eth0").
     #[arg(short, long)]
     pub interface: String,
-
     /// Collector address as HOST:PORT.
     #[arg(short, long)]
     pub collector: String,
-
+    /// BPF filter expression applied to the capture.
+    #[arg(short, long)]
+    pub filter: Option<String>,
     /// Enable debug logging.
     #[arg(short, long)]
     pub verbose: bool,
