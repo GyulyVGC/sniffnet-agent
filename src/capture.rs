@@ -1,10 +1,9 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use etherparse::{EtherType, LaxPacketHeaders, LinkHeader, NetHeaders, TransportHeader};
 use pcap::{Active, Capture, Linktype};
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 use crate::cli::Args;
 use crate::flow::{FlowKey, FlowTable};
@@ -16,16 +15,8 @@ struct Decoded {
     dst_mac: Option<[u8; 6]>,
 }
 
-pub fn run(args: &Args, table: &Arc<FlowTable>, shutdown: &Arc<AtomicBool>) {
-    let mut cap = match open_capture(args) {
-        Ok(c) => c,
-        Err(e) => {
-            error!("failed to open capture on '{}': {e}", args.interface);
-            shutdown.store(true, Ordering::SeqCst);
-            return;
-        }
-    };
-
+pub fn open(args: &Args) -> Result<(Capture<Active>, Linktype), pcap::Error> {
+    let cap = open_capture(args)?;
     let link_type = cap.get_datalink();
     if !link_type_is_supported(link_type) {
         warn!(
@@ -34,29 +25,18 @@ pub fn run(args: &Args, table: &Arc<FlowTable>, shutdown: &Arc<AtomicBool>) {
             args.interface, link_type
         );
     }
-    if !link_type_has_macs(link_type) {
-        debug!("link type {:?} carries no MAC addresses", link_type);
-    }
     info!(interface = %args.interface, ?link_type, "capture started");
+    Ok((cap, link_type))
+}
 
-    while !shutdown.load(Ordering::SeqCst) {
-        match cap.next_packet() {
-            Ok(packet) => {
-                if let Some(d) = decode_packet(packet.data, link_type) {
-                    table.record(d.key, d.bytes, d.src_mac, d.dst_mac);
-                }
-            }
-            Err(pcap::Error::TimeoutExpired) => {}
-            Err(pcap::Error::NoMorePackets) => {
-                debug!("capture exhausted");
-                break;
-            }
-            Err(e) => {
-                warn!("capture error: {e}");
-            }
+pub fn run(mut cap: Capture<Active>, link_type: Linktype, table: &Arc<FlowTable>) {
+    loop {
+        if let Ok(packet) = cap.next_packet()
+            && let Some(d) = decode_packet(packet.data, link_type)
+        {
+            table.record(d.key, d.bytes, d.src_mac, d.dst_mac);
         }
     }
-    info!("capture stopped");
 }
 
 fn link_type_is_supported(lt: Linktype) -> bool {
@@ -71,10 +51,6 @@ fn link_type_is_supported(lt: Linktype) -> bool {
             | Linktype::LINUX_SLL2
             | Linktype(12) // DLT_RAW
     )
-}
-
-fn link_type_has_macs(lt: Linktype) -> bool {
-    lt == Linktype::ETHERNET
 }
 
 fn open_capture(args: &Args) -> Result<Capture<Active>, pcap::Error> {

@@ -28,7 +28,7 @@ impl Exporter {
         })
     }
 
-    pub fn flush(&mut self, snapshots: &Vec<(FlowKey, FlowSnapshot)>) -> io::Result<()> {
+    pub fn flush(&mut self, snapshots: &[(FlowKey, FlowSnapshot)]) -> io::Result<()> {
         if snapshots.is_empty() {
             return Ok(());
         }

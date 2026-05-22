@@ -9,9 +9,7 @@ mod flow;
 mod ipfix;
 
 use clap::Parser;
-use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -20,7 +18,7 @@ use crate::cli::Args;
 use crate::exporter::Exporter;
 use crate::flow::FlowTable;
 
-fn main() -> ExitCode {
+fn main() {
     let args = Args::parse();
     init_logging(args.verbose);
 
@@ -28,7 +26,7 @@ fn main() -> ExitCode {
         Ok(addr) => addr,
         Err(e) => {
             error!("{e}");
-            return ExitCode::from(2);
+            std::process::exit(2);
         }
     };
 
@@ -39,56 +37,42 @@ fn main() -> ExitCode {
     );
 
     let table = Arc::new(FlowTable::new());
-    let shutdown = Arc::new(AtomicBool::new(false));
 
-    let shutdown_signal = shutdown.clone();
-    if let Err(e) = ctrlc::set_handler(move || shutdown_signal.store(true, Ordering::SeqCst)) {
+    if let Err(e) = ctrlc::set_handler(|| std::process::exit(130)) {
         error!("failed to install signal handler: {e}");
-        return ExitCode::from(1);
+        std::process::exit(1);
     }
 
     let mut exporter = match Exporter::connect(collector_addr) {
         Ok(e) => e,
         Err(e) => {
             error!("failed to bind UDP socket: {e}");
-            return ExitCode::from(1);
+            std::process::exit(1);
         }
     };
 
-    let capture_handle = {
-        let table = table.clone();
-        let shutdown = shutdown.clone();
-        let cap_args = args.clone();
-        std::thread::Builder::new()
-            .name("capture".into())
-            .spawn(move || capture::run(&cap_args, &table, &shutdown))
-    };
-
-    let capture_handle = match capture_handle {
-        Ok(h) => h,
+    let (cap, link_type) = match capture::open(&args) {
+        Ok(x) => x,
         Err(e) => {
-            error!("failed to spawn capture thread: {e}");
-            return ExitCode::from(1);
+            error!("failed to open capture on '{}': {e}", args.interface);
+            std::process::exit(1);
         }
     };
 
-    // Flush loop runs on the main thread.
-    let flush_interval = Duration::from_millis(900);
-    while !shutdown.load(Ordering::SeqCst) {
-        std::thread::sleep(flush_interval);
-        if shutdown.load(Ordering::SeqCst) {
-            break;
-        }
-        run_flush(&mut exporter, &table, collector_addr);
+    if let Err(e) = std::thread::Builder::new().name("capture".into()).spawn({
+        let table = table.clone();
+        move || capture::run(cap, link_type, &table)
+    }) {
+        error!("failed to spawn capture thread: {e}");
+        std::process::exit(1);
     }
 
-    // Final flush before exit so the last window of deltas isn't lost.
-    run_flush(&mut exporter, &table, collector_addr);
-
-    let _ = capture_handle.join();
-
-    info!("shutdown complete");
-    ExitCode::SUCCESS
+    // Flush loop runs on the main thread; exits only via ctrl+c handler.
+    let flush_interval = Duration::from_millis(900);
+    loop {
+        std::thread::sleep(flush_interval);
+        run_flush(&mut exporter, &table, collector_addr);
+    }
 }
 
 fn run_flush(exporter: &mut Exporter, table: &FlowTable, collector: std::net::SocketAddr) {
