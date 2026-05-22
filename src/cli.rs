@@ -2,13 +2,13 @@ use clap::Parser;
 use std::net::{SocketAddr, ToSocketAddrs};
 
 #[derive(Parser, Debug, Clone)]
-#[command(version, about = "IPFIX exporter for Sniffnet", long_about = None)]
+#[command(version, about = "Lightweight network flows exporter for Sniffnet")]
 pub struct Args {
     /// Network interface to capture on (e.g. "en0", "eth0").
     #[arg(short, long)]
     pub interface: String,
     /// Collector address as HOST:PORT.
-    #[arg(short, long)]
+    #[arg(short, long, value_name = "HOST:PORT")]
     pub collector: String,
     /// BPF filter expression applied to the capture.
     #[arg(short, long)]

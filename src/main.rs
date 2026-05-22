@@ -2,8 +2,9 @@
 // TODO: pass collector IP and port separately?
 // TODO: thoroughly check manifest, README, docs
 // TODO: carefully check /ipfix files
-// TODO: version cli arg
 // TODO: verbose logging including PCAP errors?
+// TODO: info about dropped packets? (IE 164 ignoredPacketTotalCount)
+// TODO: add CLI arg to list interfaces and exit
 
 mod capture;
 mod cli;
