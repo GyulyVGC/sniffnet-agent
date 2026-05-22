@@ -1,6 +1,6 @@
 //! RFC 7011 IPFIX message encoder.
 //!
-//! Builds one or more IPFIX-over-UDP datagrams from a batch of flow snapshots,
+//! Builds one or more IPFIX-over-UDP datagrams from a batch of flow flows,
 //! splitting across datagrams to stay under `mtu`. Each datagram has the form
 //!
 //! ```text
@@ -15,30 +15,30 @@
 
 use std::net::IpAddr;
 
-use crate::flow::{FlowKey, FlowSnapshot};
+use crate::flow::{FlowKey, FlowVal};
 use crate::ipfix::template::write_template_set;
 use crate::ipfix::{
     RECORD_SIZE_V4, RECORD_SIZE_V6, SET_HEADER_LEN, TEMPLATE_ID_V4, TEMPLATE_ID_V6, VERSION,
 };
 
-/// Encode `snapshots` into one or more UDP-ready datagrams.
+/// Encode `flows` into one or more UDP-ready datagrams.
 ///
 /// Returns the datagrams (in send order) and the new sequence number that the
 /// caller should persist as the starting point for the next call.
 pub fn build_datagrams(
-    snapshots: &[(FlowKey, FlowSnapshot)],
+    flows: &[(FlowKey, FlowVal)],
     seq_start: u32,
     mut include_template_set: bool,
     now_unix: u32,
 ) -> (Vec<Vec<u8>>, u32) {
     let mtu: usize = 1400;
 
-    let mut v4: Vec<&(FlowKey, FlowSnapshot)> = Vec::new();
-    let mut v6: Vec<&(FlowKey, FlowSnapshot)> = Vec::new();
-    for pair in snapshots {
-        match pair.0.src_ip {
-            IpAddr::V4(_) => v4.push(pair),
-            IpAddr::V6(_) => v6.push(pair),
+    let mut v4: Vec<&(FlowKey, FlowVal)> = Vec::new();
+    let mut v6: Vec<&(FlowKey, FlowVal)> = Vec::new();
+    for flow in flows {
+        match flow.0.src_ip {
+            IpAddr::V4(_) => v4.push(flow),
+            IpAddr::V6(_) => v6.push(flow),
         }
     }
 
@@ -70,8 +70,8 @@ pub fn build_datagrams(
             let take = fit.min(v4.len() - v4_idx);
             if take > 0 {
                 write_data_set(&mut buf, TEMPLATE_ID_V4, take * RECORD_SIZE_V4, |out| {
-                    for pair in &v4[v4_idx..v4_idx + take] {
-                        write_v4_record(out, &pair.0, &pair.1);
+                    for flow in &v4[v4_idx..v4_idx + take] {
+                        write_v4_record(out, &flow.0, &flow.1);
                     }
                 });
                 v4_idx += take;
@@ -85,8 +85,8 @@ pub fn build_datagrams(
             let take = fit.min(v6.len() - v6_idx);
             if take > 0 {
                 write_data_set(&mut buf, TEMPLATE_ID_V6, take * RECORD_SIZE_V6, |out| {
-                    for pair in &v6[v6_idx..v6_idx + take] {
-                        write_v6_record(out, &pair.0, &pair.1);
+                    for flow in &v6[v6_idx..v6_idx + take] {
+                        write_v6_record(out, &flow.0, &flow.1);
                     }
                 });
                 v6_idx += take;
@@ -121,7 +121,7 @@ fn write_data_set(
     write_payload(out);
 }
 
-fn write_v4_record(out: &mut Vec<u8>, key: &FlowKey, snap: &FlowSnapshot) {
+fn write_v4_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
     let IpAddr::V4(src) = key.src_ip else {
         unreachable!("v4 bucket only contains v4 source addresses");
     };
@@ -130,37 +130,37 @@ fn write_v4_record(out: &mut Vec<u8>, key: &FlowKey, snap: &FlowSnapshot) {
         // address rather than panic. Capture pipeline rejects mixed-family flows.
         out.extend_from_slice(&src.octets());
         out.extend_from_slice(&[0u8; 4]);
-        write_common_tail(out, key, snap);
+        write_common_tail(out, key, val);
         return;
     };
     out.extend_from_slice(&src.octets());
     out.extend_from_slice(&dst.octets());
-    write_common_tail(out, key, snap);
+    write_common_tail(out, key, val);
 }
 
-fn write_v6_record(out: &mut Vec<u8>, key: &FlowKey, snap: &FlowSnapshot) {
+fn write_v6_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
     let IpAddr::V6(src) = key.src_ip else {
         unreachable!("v6 bucket only contains v6 source addresses");
     };
     let IpAddr::V6(dst) = key.dst_ip else {
         out.extend_from_slice(&src.octets());
         out.extend_from_slice(&[0u8; 16]);
-        write_common_tail(out, key, snap);
+        write_common_tail(out, key, val);
         return;
     };
     out.extend_from_slice(&src.octets());
     out.extend_from_slice(&dst.octets());
-    write_common_tail(out, key, snap);
+    write_common_tail(out, key, val);
 }
 
-fn write_common_tail(out: &mut Vec<u8>, key: &FlowKey, snap: &FlowSnapshot) {
+fn write_common_tail(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
     out.extend_from_slice(&key.src_port.to_be_bytes());
     out.extend_from_slice(&key.dst_port.to_be_bytes());
     out.push(key.protocol);
-    out.extend_from_slice(&snap.src_mac);
-    out.extend_from_slice(&snap.dst_mac);
-    out.extend_from_slice(&snap.bytes.to_be_bytes());
-    out.extend_from_slice(&snap.packets.to_be_bytes());
+    out.extend_from_slice(&val.src_mac.unwrap_or([0; 6]));
+    out.extend_from_slice(&val.dst_mac.unwrap_or([0; 6]));
+    out.extend_from_slice(&val.bytes.to_be_bytes());
+    out.extend_from_slice(&val.packets.to_be_bytes());
 }
 
 #[cfg(test)]
@@ -168,7 +168,7 @@ mod tests {
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
-    fn v4_snap(a: u8, b: u8, bytes: u64, packets: u64) -> (FlowKey, FlowSnapshot) {
+    fn v4_flow(a: u8, b: u8, bytes: u64, packets: u64) -> (FlowKey, FlowVal) {
         (
             FlowKey {
                 src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, a)),
@@ -177,16 +177,16 @@ mod tests {
                 dst_port: 443,
                 protocol: 6,
             },
-            FlowSnapshot {
+            FlowVal {
                 bytes,
                 packets,
-                src_mac: [0xaa; 6],
-                dst_mac: [0xbb; 6],
+                src_mac: Some([0xaa; 6]),
+                dst_mac: Some([0xbb; 6]),
             },
         )
     }
 
-    fn v6_snap(bytes: u64, packets: u64) -> (FlowKey, FlowSnapshot) {
+    fn v6_flow(bytes: u64, packets: u64) -> (FlowKey, FlowVal) {
         (
             FlowKey {
                 src_ip: IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
@@ -195,17 +195,17 @@ mod tests {
                 dst_port: 80,
                 protocol: 17,
             },
-            FlowSnapshot {
+            FlowVal {
                 bytes,
                 packets,
-                src_mac: [0; 6],
-                dst_mac: [0; 6],
+                src_mac: None,
+                dst_mac: None,
             },
         )
     }
 
     #[test]
-    fn empty_snapshots_produces_no_datagrams() {
+    fn empty_flows_produces_no_datagrams() {
         let (out, seq) = build_datagrams(&[], 0, false, 12345);
         assert!(out.is_empty());
         assert_eq!(seq, 0);
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn header_layout_is_exact() {
-        let s = [v4_snap(1, 2, 100, 5)];
+        let s = [v4_flow(1, 2, 100, 5)];
         let (out, _) = build_datagrams(&s, 0x1122_3344, false, 0xDEADBEEF);
         assert_eq!(out.len(), 1);
         let dg = &out[0];
@@ -227,10 +227,10 @@ mod tests {
 
     #[test]
     fn template_set_only_in_first_datagram() {
-        let snaps: Vec<_> = (0..50)
-            .map(|i| v4_snap(i as u8, (i + 1) as u8, 100, 1))
+        let flows: Vec<_> = (0..50)
+            .map(|i| v4_flow(i as u8, (i + 1) as u8, 100, 1))
             .collect();
-        let (out, _) = build_datagrams(&snaps, 0, true, 0);
+        let (out, _) = build_datagrams(&flows, 0, true, 0);
         assert!(out.len() >= 2);
         // first datagram should contain template set id (2) right after header
         let first_set_id = u16::from_be_bytes([out[0][16], out[0][17]]);
@@ -249,13 +249,13 @@ mod tests {
             dst_port: 0x01BB,
             protocol: 6,
         };
-        let snap = FlowSnapshot {
+        let val = FlowVal {
             bytes: 0x0102_0304_0506_0708,
             packets: 0x00FF,
-            src_mac: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
-            dst_mac: [0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC],
+            src_mac: Some([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
+            dst_mac: Some([0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]),
         };
-        let (out, _) = build_datagrams(&[(key, snap)], 0, false, 0);
+        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0);
         let dg = &out[0];
         // Skip 16B header + 4B data set header = 20B prefix.
         let rec = &dg[20..20 + RECORD_SIZE_V4];
@@ -275,8 +275,8 @@ mod tests {
 
     #[test]
     fn sequence_number_advances_by_record_count() {
-        let snaps = vec![v4_snap(1, 2, 100, 1), v4_snap(3, 4, 200, 1)];
-        let (_, seq) = build_datagrams(&snaps, 100, false, 0);
+        let flows = vec![v4_flow(1, 2, 100, 1), v4_flow(3, 4, 200, 1)];
+        let (_, seq) = build_datagrams(&flows, 100, false, 0);
         assert_eq!(seq, 102);
     }
 
@@ -284,10 +284,10 @@ mod tests {
     fn sequence_number_carries_across_messages() {
         // At mtu=1400 a no-template datagram fits floor((1400 - 16 - 4) / 41) = 33 v4
         // records. 67 records therefore splits into 33 + 33 + 1 across three datagrams.
-        let snaps: Vec<_> = (0..67)
-            .map(|i| v4_snap((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
+        let flows: Vec<_> = (0..67)
+            .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
-        let (out, seq) = build_datagrams(&snaps, 0, false, 0);
+        let (out, seq) = build_datagrams(&flows, 0, false, 0);
         assert_eq!(out.len(), 3);
         assert_eq!(
             u32::from_be_bytes([out[0][8], out[0][9], out[0][10], out[0][11]]),
@@ -306,17 +306,17 @@ mod tests {
 
     #[test]
     fn sequence_number_wraps_modulo_2_32() {
-        let snaps = vec![v4_snap(1, 2, 100, 1), v4_snap(3, 4, 100, 1)];
-        let (_, seq) = build_datagrams(&snaps, u32::MAX - 1, false, 0);
+        let flows = vec![v4_flow(1, 2, 100, 1), v4_flow(3, 4, 100, 1)];
+        let (_, seq) = build_datagrams(&flows, u32::MAX - 1, false, 0);
         assert_eq!(seq, 0);
     }
 
     #[test]
     fn mtu_split_v4_count_matches_input() {
-        let snaps: Vec<_> = (0..200)
-            .map(|i| v4_snap((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
+        let flows: Vec<_> = (0..200)
+            .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
-        let (out, seq) = build_datagrams(&snaps, 0, false, 0);
+        let (out, seq) = build_datagrams(&flows, 0, false, 0);
         assert_eq!(seq, 200);
         // Sum the records reported in each datagram's message length.
         let mut total_records = 0u32;
@@ -333,8 +333,8 @@ mod tests {
 
     #[test]
     fn v4_and_v6_share_a_datagram_when_room_allows() {
-        let snaps = vec![v4_snap(1, 2, 100, 1), v6_snap(200, 2)];
-        let (out, _) = build_datagrams(&snaps, 0, false, 0);
+        let flows = vec![v4_flow(1, 2, 100, 1), v6_flow(200, 2)];
+        let (out, _) = build_datagrams(&flows, 0, false, 0);
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         // After 16B header: v4 data set (4 + 41 = 45B) then v6 data set (4 + 65 = 69B)
@@ -351,9 +351,9 @@ mod tests {
 
     #[test]
     fn include_template_set_flag_drives_first_datagram_layout() {
-        let snaps = [v4_snap(1, 2, 100, 1)];
-        let (with, _) = build_datagrams(&snaps, 0, true, 0);
-        let (without, _) = build_datagrams(&snaps, 0, false, 0);
+        let flows = [v4_flow(1, 2, 100, 1)];
+        let (with, _) = build_datagrams(&flows, 0, true, 0);
+        let (without, _) = build_datagrams(&flows, 0, false, 0);
         // With template, the first set is the template set (id=2)
         let with_id = u16::from_be_bytes([with[0][16], with[0][17]]);
         let without_id = u16::from_be_bytes([without[0][16], without[0][17]]);

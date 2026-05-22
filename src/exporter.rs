@@ -4,7 +4,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tracing::warn;
 
-use crate::flow::{FlowKey, FlowSnapshot};
+use crate::flow::{FlowKey, FlowVal};
 use crate::ipfix::encode::build_datagrams;
 
 pub struct Exporter {
@@ -28,8 +28,8 @@ impl Exporter {
         })
     }
 
-    pub fn flush(&mut self, snapshots: &[(FlowKey, FlowSnapshot)]) -> io::Result<()> {
-        if snapshots.is_empty() {
+    pub fn flush(&mut self, flows: &[(FlowKey, FlowVal)]) -> io::Result<()> {
+        if flows.is_empty() {
             return Ok(());
         }
         let include_template_set = match self.last_template_send {
@@ -37,8 +37,7 @@ impl Exporter {
             Some(t) => t.elapsed() >= Duration::from_secs(30),
         };
         let now_unix = unix_seconds();
-        let (datagrams, new_seq) =
-            build_datagrams(snapshots, self.seq, include_template_set, now_unix);
+        let (datagrams, new_seq) = build_datagrams(flows, self.seq, include_template_set, now_unix);
         if include_template_set {
             self.last_template_send = Some(Instant::now());
         }
@@ -72,7 +71,7 @@ mod tests {
     use crate::flow::FlowKey;
     use std::net::{IpAddr, Ipv4Addr};
 
-    fn flow(a: u8) -> (FlowKey, FlowSnapshot) {
+    fn flow(a: u8) -> (FlowKey, FlowVal) {
         (
             FlowKey {
                 src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, a)),
@@ -81,11 +80,11 @@ mod tests {
                 dst_port: 443,
                 protocol: 6,
             },
-            FlowSnapshot {
+            FlowVal {
                 bytes: 100,
                 packets: 1,
-                src_mac: [0; 6],
-                dst_mac: [0; 6],
+                src_mac: None,
+                dst_mac: None,
             },
         )
     }
@@ -116,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_with_empty_snapshots_is_noop_and_no_socket_write() {
+    fn flush_with_empty_flows_is_noop_and_no_socket_write() {
         // Bind a receiver that we'll assert never gets data.
         let recv = UdpSocket::bind("127.0.0.1:0").unwrap();
         recv.set_read_timeout(Some(Duration::from_millis(50)))

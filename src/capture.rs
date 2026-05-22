@@ -1,12 +1,13 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::mpsc::Sender;
+use std::time::{Duration, Instant};
 
 use etherparse::{EtherType, LaxPacketHeaders, LinkHeader, NetHeaders, TransportHeader};
 use pcap::{Active, Capture, Linktype};
 use tracing::{info, warn};
 
 use crate::cli::Args;
-use crate::flow::{FlowKey, FlowTable};
+use crate::flow::{FlowKey, FlowTable, FlowVal};
 
 struct Decoded {
     key: FlowKey,
@@ -29,8 +30,24 @@ pub fn open(args: &Args) -> Result<(Capture<Active>, Linktype), pcap::Error> {
     Ok((cap, link_type))
 }
 
-pub fn run(mut cap: Capture<Active>, link_type: Linktype, table: &Arc<FlowTable>) {
+pub fn run(
+    mut cap: Capture<Active>,
+    link_type: Linktype,
+    tx: &Sender<Vec<(FlowKey, FlowVal)>>,
+    exclude: SocketAddr,
+) {
+    let mut table = FlowTable::new();
+    let interval = Duration::from_millis(900);
+    let mut last_drain = Instant::now();
+
     loop {
+        if last_drain.elapsed() >= interval {
+            if tx.send(table.drain(exclude)).is_err() {
+                return;
+            }
+            last_drain = Instant::now();
+        }
+
         if let Ok(packet) = cap.next_packet()
             && let Some(d) = decode_packet(packet.data, link_type)
         {
@@ -92,8 +109,8 @@ fn from_null(packet: &[u8]) -> Option<LaxPacketHeaders<'_>> {
 
     let is_valid_af_inet = {
         // based on https://wiki.wireshark.org/NullLoopback.md (2023-12-31)
-        fn matches(value: u32) -> bool {
-            match value {
+        fn matches(val: u32) -> bool {
+            match val {
                 // 2 = IPv4 on all platforms
                 // 24, 28, or 30 = IPv6 depending on platform
                 2 | 24 | 28 | 30 => true,

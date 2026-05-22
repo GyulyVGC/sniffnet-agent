@@ -1,6 +1,9 @@
 // TODO: improve logging
 // TODO: pass collector IP and port separately?
 // TODO: thoroughly check manifest, README, docs
+// TODO: carefully check /ipfix files
+// TODO: version cli arg
+// TODO: verbose logging including PCAP errors?
 
 mod capture;
 mod cli;
@@ -9,14 +12,13 @@ mod flow;
 mod ipfix;
 
 use clap::Parser;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::mpsc;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::Args;
 use crate::exporter::Exporter;
-use crate::flow::FlowTable;
+use crate::flow::{FlowKey, FlowVal};
 
 fn main() {
     let args = Args::parse();
@@ -35,8 +37,6 @@ fn main() {
         collector = %collector_addr,
         "starting sniffnet-agent"
     );
-
-    let table = Arc::new(FlowTable::new());
 
     if let Err(e) = ctrlc::set_handler(|| std::process::exit(130)) {
         error!("failed to install signal handler: {e}");
@@ -59,29 +59,27 @@ fn main() {
         }
     };
 
-    if let Err(e) = std::thread::Builder::new().name("capture".into()).spawn({
-        let table = table.clone();
-        move || capture::run(cap, link_type, &table)
-    }) {
+    let (tx, rx) = mpsc::channel::<Vec<(FlowKey, FlowVal)>>();
+    if let Err(e) = std::thread::Builder::new()
+        .name("capture".into())
+        .spawn(move || capture::run(cap, link_type, &tx, collector_addr))
+    {
         error!("failed to spawn capture thread: {e}");
         std::process::exit(1);
     }
 
-    // Flush loop runs on the main thread; exits only via ctrl+c handler.
-    let flush_interval = Duration::from_millis(900);
-    loop {
-        std::thread::sleep(flush_interval);
-        run_flush(&mut exporter, &table, collector_addr);
+    // Main thread exports each set of flows delivered by the capture thread.
+    for flows in rx {
+        run_flush(&mut exporter, &flows);
     }
 }
 
-fn run_flush(exporter: &mut Exporter, table: &FlowTable, collector: std::net::SocketAddr) {
-    let snapshots = table.drain_deltas(collector);
-    if snapshots.is_empty() {
+fn run_flush(exporter: &mut Exporter, flows: &[(FlowKey, FlowVal)]) {
+    if flows.is_empty() {
         return;
     }
-    let count = snapshots.len();
-    if let Err(e) = exporter.flush(&snapshots) {
+    let count = flows.len();
+    if let Err(e) = exporter.flush(flows) {
         tracing::warn!("flush failed: {e}");
     } else {
         tracing::debug!(records = count, "flushed");
