@@ -16,8 +16,8 @@ struct Decoded {
     dst_mac: Option<[u8; 6]>,
 }
 
-pub fn run(args: Args, table: Arc<FlowTable>, shutdown: Arc<AtomicBool>) {
-    let mut cap = match open_capture(&args) {
+pub fn run(args: &Args, table: &Arc<FlowTable>, shutdown: &Arc<AtomicBool>) {
+    let mut cap = match open_capture(args) {
         Ok(c) => c,
         Err(e) => {
             error!("failed to open capture on '{}': {e}", args.interface);
@@ -99,69 +99,73 @@ fn open_capture(args: &Args) -> Result<Capture<Active>, pcap::Error> {
     Ok(cap)
 }
 
-/// Dispatch decoding based on pcap link type. Mirrors Sniffnet's
-/// `parse_packets::get_sniffable_headers`.
-fn parse_by_link_type(data: &[u8], link_type: Linktype) -> Option<LaxPacketHeaders<'_>> {
+fn get_sniffable_headers(packet: &[u8], link_type: Linktype) -> Option<LaxPacketHeaders<'_>> {
     match link_type {
-        Linktype::ETHERNET => LaxPacketHeaders::from_ethernet(data).ok(),
-        Linktype::NULL | Linktype::LOOP => from_null(data),
-        Linktype::LINUX_SLL => from_linux_sll(data, true),
-        Linktype::LINUX_SLL2 => from_linux_sll(data, false),
-        // DLT_RAW (12) — raw IP packets with no link layer.
-        Linktype::IPV4 | Linktype::IPV6 | Linktype(12) => LaxPacketHeaders::from_ip(data).ok(),
-        // Forgiving default for unknown link types: try Ethernet, same as Sniffnet.
-        _ => LaxPacketHeaders::from_ethernet(data).ok(),
+        Linktype::NULL | Linktype::LOOP => from_null(packet),
+        Linktype::LINUX_SLL => from_linux_sll(packet, true),
+        Linktype::LINUX_SLL2 => from_linux_sll(packet, false),
+        Linktype::IPV4 | Linktype::IPV6 | Linktype(12) => LaxPacketHeaders::from_ip(packet).ok(),
+        _ => LaxPacketHeaders::from_ethernet(packet).ok(),
     }
 }
 
-/// BSD/macOS loopback (DLT_NULL/DLT_LOOP): 4-byte address-family prefix then IP.
-/// AF values vary by platform and endianness; cf. Sniffnet's `from_null` and
-/// https://wiki.wireshark.org/NullLoopback.md
 fn from_null(packet: &[u8]) -> Option<LaxPacketHeaders<'_>> {
     if packet.len() <= 4 {
         return None;
     }
-    fn matches(value: u32) -> bool {
-        // 2 = IPv4 (all platforms); 24, 28, 30 = IPv6 (platform-dependent).
-        matches!(value, 2 | 24 | 28 | 30)
-    }
-    let h = [packet[0], packet[1], packet[2], packet[3]];
-    if matches(u32::from_le_bytes(h)) || matches(u32::from_be_bytes(h)) {
+
+    let is_valid_af_inet = {
+        // based on https://wiki.wireshark.org/NullLoopback.md (2023-12-31)
+        fn matches(value: u32) -> bool {
+            match value {
+                // 2 = IPv4 on all platforms
+                // 24, 28, or 30 = IPv6 depending on platform
+                2 | 24 | 28 | 30 => true,
+                _ => false,
+            }
+        }
+        let h = &packet[..4];
+        let b = [h[0], h[1], h[2], h[3]];
+        // check both big endian and little endian representations
+        // as some OS'es use native endianness and others use big endian
+        matches(u32::from_le_bytes(b)) || matches(u32::from_be_bytes(b))
+    };
+
+    if is_valid_af_inet {
         LaxPacketHeaders::from_ip(&packet[4..]).ok()
     } else {
         None
     }
 }
 
-/// Linux cooked capture (SLL v1 = 16 bytes, SLL2 = 20 bytes). Reads the
-/// EtherType from the cooked header and hands the payload to etherparse.
 fn from_linux_sll(packet: &[u8], is_v1: bool) -> Option<LaxPacketHeaders<'_>> {
     let header_len = if is_v1 { 16 } else { 20 };
     if packet.len() <= header_len {
         return None;
     }
+
     let protocol_type = u16::from_be_bytes(if is_v1 {
         [packet[14], packet[15]]
     } else {
         [packet[0], packet[1]]
     });
+    let payload = &packet[header_len..];
+
     Some(LaxPacketHeaders::from_ether_type(
         EtherType(protocol_type),
-        &packet[header_len..],
+        payload,
     ))
 }
 
 fn decode_packet(data: &[u8], link_type: Linktype) -> Option<Decoded> {
-    // LaxPacketHeaders tolerates payloads truncated by snaplen, unlike SlicedPacket
-    // which rejects any IP datagram whose `total_len` exceeds the captured slice.
-    let parsed = parse_by_link_type(data, link_type)?;
+    let headers = get_sniffable_headers(data, link_type)?;
 
-    let (src_mac, dst_mac) = match parsed.link {
+    let (src_mac, dst_mac) = match headers.link {
         Some(LinkHeader::Ethernet2(eth)) => (Some(eth.source), Some(eth.destination)),
         _ => (None, None),
     };
 
-    let (src_ip, dst_ip, bytes) = match parsed.net? {
+    let (src_ip, dst_ip, bytes) = match headers.net? {
         NetHeaders::Ipv4(h, _) => (
             IpAddr::V4(Ipv4Addr::from(h.source)),
             IpAddr::V4(Ipv4Addr::from(h.destination)),
@@ -172,12 +176,10 @@ fn decode_packet(data: &[u8], link_type: Linktype) -> Option<Decoded> {
             IpAddr::V6(Ipv6Addr::from(h.destination)),
             u64::from(h.payload_length) + 40,
         ),
-        // ARP and other non-IP L3 protocols have no representation in our IPFIX
-        // templates (which key on IPv4/IPv6 addresses) — drop them here.
-        _ => return None,
+        NetHeaders::Arp(_) => return None,
     };
 
-    let (src_port, dst_port, protocol) = match parsed.transport? {
+    let (src_port, dst_port, protocol) = match headers.transport? {
         TransportHeader::Tcp(t) => (t.source_port, t.destination_port, 6u8),
         TransportHeader::Udp(u) => (u.source_port, u.destination_port, 17u8),
         TransportHeader::Icmpv4(_) => (0, 0, 1u8),

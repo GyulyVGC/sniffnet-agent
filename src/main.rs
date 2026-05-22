@@ -1,4 +1,6 @@
-// TODO: handle logging?
+// TODO: improve logging
+// TODO: pass collector IP and port separately?
+// TODO: thoroughly check manifest, README, docs
 
 mod capture;
 mod cli;
@@ -45,7 +47,7 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let exporter = match Exporter::connect(collector_addr) {
+    let mut exporter = match Exporter::connect(collector_addr) {
         Ok(e) => e,
         Err(e) => {
             error!("failed to bind UDP socket: {e}");
@@ -59,7 +61,7 @@ fn main() -> ExitCode {
         let cap_args = args.clone();
         std::thread::Builder::new()
             .name("capture".into())
-            .spawn(move || capture::run(cap_args, table, shutdown))
+            .spawn(move || capture::run(&cap_args, &table, &shutdown))
     };
 
     let capture_handle = match capture_handle {
@@ -72,7 +74,6 @@ fn main() -> ExitCode {
 
     // Flush loop runs on the main thread.
     let flush_interval = Duration::from_millis(900);
-    let mut exporter = exporter;
     while !shutdown.load(Ordering::SeqCst) {
         std::thread::sleep(flush_interval);
         if shutdown.load(Ordering::SeqCst) {
@@ -96,7 +97,7 @@ fn run_flush(exporter: &mut Exporter, table: &FlowTable, collector: std::net::So
         return;
     }
     let count = snapshots.len();
-    if let Err(e) = exporter.flush(snapshots) {
+    if let Err(e) = exporter.flush(&snapshots) {
         tracing::warn!("flush failed: {e}");
     } else {
         tracing::debug!(records = count, "flushed");

@@ -28,7 +28,7 @@ impl Exporter {
         })
     }
 
-    pub fn flush(&mut self, snapshots: Vec<(FlowKey, FlowSnapshot)>) -> io::Result<()> {
+    pub fn flush(&mut self, snapshots: &Vec<(FlowKey, FlowSnapshot)>) -> io::Result<()> {
         if snapshots.is_empty() {
             return Ok(());
         }
@@ -38,7 +38,7 @@ impl Exporter {
         };
         let now_unix = unix_seconds();
         let (datagrams, new_seq) =
-            build_datagrams(&snapshots, self.seq, include_template_set, now_unix);
+            build_datagrams(snapshots, self.seq, include_template_set, now_unix);
         if include_template_set {
             self.last_template_send = Some(Instant::now());
         }
@@ -63,8 +63,7 @@ impl Exporter {
 fn unix_seconds() -> u32 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as u32)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs() as u32)
 }
 
 #[cfg(test)]
@@ -100,7 +99,7 @@ mod tests {
         let recv_addr = recv.local_addr().unwrap();
 
         let mut exp = Exporter::connect(recv_addr).unwrap();
-        exp.flush(vec![flow(1)]).unwrap();
+        exp.flush(&vec![flow(1)]).unwrap();
 
         let mut buf = [0u8; 2048];
         let (n, _) = recv.recv_from(&mut buf).unwrap();
@@ -109,7 +108,7 @@ mod tests {
         // set after header should be the Template Set (id=2)
         assert_eq!(u16::from_be_bytes([buf[16], buf[17]]), 2);
 
-        exp.flush(vec![flow(2)]).unwrap();
+        exp.flush(&vec![flow(2)]).unwrap();
         let (n2, _) = recv.recv_from(&mut buf).unwrap();
         // second datagram should NOT include templates: 16 + 4 + 41 = 61
         assert_eq!(n2, 61);
@@ -123,7 +122,7 @@ mod tests {
         recv.set_read_timeout(Some(Duration::from_millis(50)))
             .unwrap();
         let mut exp = Exporter::connect(recv.local_addr().unwrap()).unwrap();
-        exp.flush(vec![]).unwrap();
+        exp.flush(&vec![]).unwrap();
         let mut buf = [0u8; 64];
         assert!(recv.recv_from(&mut buf).is_err(), "no datagram expected");
     }
