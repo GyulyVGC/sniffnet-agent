@@ -1,10 +1,15 @@
 // TODO: improve logging
-// TODO: pass collector IP and port separately?
-// TODO: thoroughly check manifest, README, docs
-// TODO: carefully check /ipfix files
 // TODO: verbose logging including PCAP errors?
-// TODO: info about dropped packets? (IE 164 ignoredPacketTotalCount)
+// TODO: thoroughly check manifest, README, docs
 // TODO: add CLI arg to list interfaces and exit
+
+// TODO: dropped packets?
+// TODO: ICMP message types?
+// TODO: flow direction?
+// TODO: ARP support?
+// TODO: flow timestamps?
+// TODO: exporter identity? interfaceDescription maybe
+// TODO: VLAN tags
 
 mod capture;
 mod cli;
