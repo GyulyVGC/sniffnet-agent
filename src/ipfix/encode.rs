@@ -154,8 +154,8 @@ fn write_v6_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
 }
 
 fn write_common_tail(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
-    out.extend_from_slice(&key.src_port.to_be_bytes());
-    out.extend_from_slice(&key.dst_port.to_be_bytes());
+    out.extend_from_slice(&key.src_port.unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&key.dst_port.unwrap_or(0).to_be_bytes());
     out.push(key.protocol);
     out.extend_from_slice(&val.src_mac.unwrap_or([0; 6]));
     out.extend_from_slice(&val.dst_mac.unwrap_or([0; 6]));
@@ -178,8 +178,8 @@ mod tests {
             FlowKey {
                 src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, a)),
                 dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, b)),
-                src_port: 1000 + u16::from(a),
-                dst_port: 443,
+                src_port: Some(1000 + u16::from(a)),
+                dst_port: Some(443),
                 protocol: 6,
             },
             FlowVal {
@@ -197,8 +197,8 @@ mod tests {
             FlowKey {
                 src_ip: IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
                 dst_ip: IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)),
-                src_port: 5555,
-                dst_port: 80,
+                src_port: Some(5555),
+                dst_port: Some(80),
                 protocol: 17,
             },
             FlowVal {
@@ -252,8 +252,8 @@ mod tests {
         let key = FlowKey {
             src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             dst_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
-            src_port: 0xAABB,
-            dst_port: 0x01BB,
+            src_port: Some(0xAABB),
+            dst_port: Some(0x01BB),
             protocol: 6,
         };
         let val = FlowVal {
@@ -287,8 +287,8 @@ mod tests {
         let key = FlowKey {
             src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
-            src_port: 1234,
-            dst_port: 80,
+            src_port: Some(1234),
+            dst_port: Some(80),
             protocol: 6,
         };
         let make = |dir| FlowVal {

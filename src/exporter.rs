@@ -76,8 +76,8 @@ mod tests {
             FlowKey {
                 src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, a)),
                 dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 99)),
-                src_port: 1000 + u16::from(a),
-                dst_port: 443,
+                src_port: Some(1000 + u16::from(a)),
+                dst_port: Some(443),
                 protocol: 6,
             },
             FlowVal {

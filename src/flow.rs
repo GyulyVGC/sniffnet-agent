@@ -7,8 +7,8 @@ use crate::direction::{FlowDirection, get_direction};
 pub struct FlowKey {
     pub src_ip: IpAddr,
     pub dst_ip: IpAddr,
-    pub src_port: u16,
-    pub dst_port: u16,
+    pub src_port: Option<u16>,
+    pub dst_port: Option<u16>,
     pub protocol: u8,
 }
 
@@ -17,7 +17,9 @@ impl FlowKey {
     /// collector's address+port). Filtered out on the main thread so they
     /// don't appear in the exported stream.
     pub fn is_self_export(&self, collector: SocketAddr) -> bool {
-        self.protocol == 17 && self.dst_ip == collector.ip() && self.dst_port == collector.port()
+        self.protocol == 17
+            && self.dst_ip == collector.ip()
+            && self.dst_port == Some(collector.port())
     }
 }
 
@@ -40,14 +42,11 @@ impl FlowVal {
     /// iterator: `.map(|(k, v)| (k, v.with_direction(&k, &addrs)))`. Runs on
     /// the main thread so the pcap address lookup doesn't compete with capture.
     pub fn with_direction(mut self, key: &FlowKey, my_addresses: &[IpAddr]) -> Self {
-        // Sniffnet's get_traffic_direction takes Option<u16> ports — None when
-        // the packet has no transport-layer port (ICMP). Mirror that here.
-        let port_aware = matches!(key.protocol, 6 | 17);
         self.direction = get_direction(
             &key.src_ip,
             &key.dst_ip,
-            port_aware.then_some(key.src_port),
-            port_aware.then_some(key.dst_port),
+            key.src_port,
+            key.dst_port,
             my_addresses,
         );
         self
@@ -117,8 +116,8 @@ mod tests {
         FlowKey {
             src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, a)),
             dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, b)),
-            src_port: 1000 + u16::from(a),
-            dst_port: 443,
+            src_port: Some(1000 + u16::from(a)),
+            dst_port: Some(443),
             protocol: 6,
         }
     }
@@ -188,8 +187,8 @@ mod tests {
         let self_export = FlowKey {
             src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
             dst_ip: collector_ip,
-            src_port: 54321,
-            dst_port: collector_port,
+            src_port: Some(54321),
+            dst_port: Some(collector_port),
             protocol: 17,
         };
         // TCP to same dst:port — different protocol, no match
@@ -216,15 +215,15 @@ mod tests {
         let outgoing = FlowKey {
             src_ip: local,
             dst_ip: remote,
-            src_port: 40000,
-            dst_port: 443,
+            src_port: Some(40000),
+            dst_port: Some(443),
             protocol: 6,
         };
         let incoming = FlowKey {
             src_ip: remote,
             dst_ip: local,
-            src_port: 443,
-            dst_port: 40000,
+            src_port: Some(443),
+            dst_port: Some(40000),
             protocol: 6,
         };
         let val = FlowVal {

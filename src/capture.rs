@@ -169,10 +169,10 @@ fn decode_packet(data: &[u8], link_type: Linktype) -> Option<Decoded> {
     };
 
     let (src_port, dst_port, protocol) = match headers.transport? {
-        TransportHeader::Tcp(t) => (t.source_port, t.destination_port, 6u8),
-        TransportHeader::Udp(u) => (u.source_port, u.destination_port, 17u8),
-        TransportHeader::Icmpv4(_) => (0, 0, 1u8),
-        TransportHeader::Icmpv6(_) => (0, 0, 58u8),
+        TransportHeader::Tcp(t) => (Some(t.source_port), Some(t.destination_port), 6u8),
+        TransportHeader::Udp(u) => (Some(u.source_port), Some(u.destination_port), 17u8),
+        TransportHeader::Icmpv4(_) => (None, None, 1u8),
+        TransportHeader::Icmpv6(_) => (None, None, 58u8),
     };
 
     Some(Decoded {
