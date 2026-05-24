@@ -2,11 +2,12 @@
 // TODO: verbose logging including PCAP errors?
 // TODO: thoroughly check manifest, README, docs
 
-// TODO: dropped packets
-// TODO: ICMP message types
-// TODO: ARP support
 // TODO: exporter identity!!! interfaceDescription maybe
+
+// TODO: ICMP message types
 // TODO: VLAN tags
+// TODO: dropped packets
+// TODO: ARP support
 
 mod capture;
 mod cli;

@@ -1,0 +1,414 @@
+#name: Package
+#
+#permissions:
+#  contents: read
+#
+#on:
+#  workflow_dispatch:
+#
+#jobs:
+#
+#  build:
+#    runs-on: ${{ matrix.os }}-latest
+#    strategy:
+#      fail-fast: true
+#      matrix:
+#        include:
+#          - os: ubuntu
+#            arch: i386
+#            target: i686-unknown-linux-gnu
+#          - os: ubuntu
+#            arch: armhf
+#            target: armv7-unknown-linux-gnueabihf
+#          - os: ubuntu
+#            arch: amd64
+#            target: x86_64-unknown-linux-gnu
+#          - os: ubuntu
+#            arch: arm64
+#            target: aarch64-unknown-linux-gnu
+#          - os: macos
+#            arch: amd64
+#            target: x86_64-apple-darwin
+#          - os: macos
+#            arch: arm64
+#            target: aarch64-apple-darwin
+#          - os: windows
+#            arch: i386
+#            target: i686-pc-windows-msvc
+#          - os: windows
+#            arch: amd64
+#            target: x86_64-pc-windows-msvc
+#          - os: windows
+#            arch: arm64
+#            target: aarch64-pc-windows-msvc
+#
+#    steps:
+#      - name: Checkout repository
+#        uses: actions/checkout@v6
+#
+#      - name: Install Linux dependencies
+#        if: matrix.os == 'ubuntu'
+#        run: sudo apt-get update -y && sudo apt-get install -y libpcap-dev libasound2-dev libgtk-3-dev
+#
+#      - name: Install Windows dependencies
+#        if: matrix.os == 'windows'
+#        env:
+#          NPCAP_OEM_URL: ${{ secrets.NPCAP_OEM_URL }}
+#        shell: powershell
+#        run: |
+#          Write-Host "::group::Npcap SDK"
+#          $ARCH = "${{ matrix.arch }}"
+#          Invoke-WebRequest -Uri "https://npcap.com/dist/npcap-sdk-1.13.zip" -OutFile "$env:TEMP\npcap-sdk.zip" -Verbose
+#          Expand-Archive -LiteralPath "$env:TEMP\npcap-sdk.zip" -DestinationPath "$env:TEMP\npcap-sdk" -Verbose
+#          $LibPath = switch ($ARCH)
+#          {
+#            "i386"  { "Lib"       }
+#            "amd64" { "Lib\x64"   }
+#            "arm64" { "Lib\ARM64" }
+#            default { throw "$ARCH is not supported!" }
+#          }
+#          Add-Content -Path "$env:GITHUB_ENV" -Value "LIB=$env:TEMP\npcap-sdk\$LibPath"
+#          Write-Host "::endgroup::"
+#          Write-Host "::group::Npcap DLL"
+#          Invoke-WebRequest -Uri "$env:NPCAP_OEM_URL" -OutFile "$env:TEMP\npcap-oem.exe" -Verbose
+#          Start-Process -FilePath "$env:TEMP\npcap-oem.exe" -ArgumentList "/S" -Wait
+#          Write-Host "::endgroup::"
+#
+#      - name: Install Rust
+#        uses: dtolnay/rust-toolchain@stable
+#        with:
+#          targets: ${{ matrix.target }}
+#
+#      - name: Check crate
+#        if: matrix.os == 'macos' || matrix.os == 'windows' || matrix.os == 'ubuntu' && matrix.arch == 'amd64'
+#        run: cargo publish --dry-run --target ${{ matrix.target }}
+#
+#      - name: Clippy (release mode)
+#        run: cargo clippy --release -- -D warnings
+#
+#      - name: Test (release mode)
+#        if: matrix.os == 'macos' || matrix.os == 'ubuntu' || matrix.os == 'windows' && matrix.arch == 'amd64'
+#        run: |
+#          cargo test --release --verbose -- --nocapture &&
+#          cargo clean
+#
+#      - name: Install Cross
+#        if: matrix.os == 'ubuntu'
+#        run: cargo install cross --git https://github.com/cross-rs/cross
+#
+#      - name: Build binary (Linux)
+#        if: matrix.os == 'ubuntu'
+#        run: cross build --release --target ${{ matrix.target }}
+#
+#      - name: Build binary (macOS/Windows)
+#        if: matrix.os == 'macos' || matrix.os == 'windows'
+#        run: cargo build --release --target ${{ matrix.target }}
+#
+#      - name: Upload build artifacts
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: build-${{ matrix.os }}-${{ matrix.target }}
+#          path: |
+#            target/*/release/sniffnet
+#            target/*/release/sniffnet.exe
+#          if-no-files-found: error
+#
+#  deb:
+#    runs-on: ubuntu-latest
+#    container:
+#      image: debian:latest
+#    needs: build
+#    strategy:
+#      fail-fast: true
+#      matrix:
+#        include:
+#          - target: i686-unknown-linux-gnu
+#            arch: i386
+#          - target: armv7-unknown-linux-gnueabihf
+#            arch: armhf
+#          - target: x86_64-unknown-linux-gnu
+#            arch: amd64
+#          - target: aarch64-unknown-linux-gnu
+#            arch: arm64
+#
+#    steps:
+#      - name: Checkout repository
+#        uses: actions/checkout@v6
+#
+#      - name: Install dependencies
+#        run: apt-get update -y && apt-get install -y curl build-essential
+#
+#      - name: Install Rust
+#        uses: dtolnay/rust-toolchain@stable
+#        with:
+#          targets: ${{ matrix.target }}
+#
+#      - name: Install packaging tools
+#        run: cargo install cargo-deb
+#
+#      - uses: actions/download-artifact@v8
+#        with:
+#          name: build-ubuntu-${{ matrix.target }}
+#          path: target/
+#
+#      - name: Package for Debian-based Linux distros
+#        shell: bash
+#        run: |
+#          mkdir artifacts
+#          cargo deb --no-build --no-strip --target ${{ matrix.target }}
+#          mv target/${{ matrix.target }}/debian/*.deb artifacts/Sniffnet_LinuxDEB_${{ matrix.arch }}.deb
+#
+#      - name: Upload package artifacts
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: deb-${{ matrix.arch }}
+#          path: artifacts/
+#          if-no-files-found: error
+#
+#  appimage:
+#    runs-on: ubuntu-latest
+#    container:
+#      image: debian:latest
+#      options: --privileged
+#    needs: deb
+#    strategy:
+#      fail-fast: true
+#      matrix:
+#        include:
+#          - arch: amd64
+#            appimgarch: x86_64
+#          - arch: arm64
+#            appimgarch: aarch64
+#          - arch: i386
+#            appimgarch: i686
+#          - arch: armhf
+#            appimgarch: armhf
+#
+#    steps:
+#      - name: Checkout repository
+#        uses: actions/checkout@v6
+#
+#      - name: Install dependencies
+#        run: apt-get update -y && apt-get install -y git build-essential graphicsmagick-imagemagick-compat wget file desktop-file-utils libfuse2
+#
+#      - name: Download Debian package
+#        uses: actions/download-artifact@v8
+#        with:
+#          name: deb-${{ matrix.arch }}
+#          path: /target/
+#
+#      - name: Download pkg2appimage
+#        shell: bash
+#        run: git clone https://github.com/AppImageCommunity/pkg2appimage.git
+#
+#      - name: Replace placeholders
+#        shell: bash
+#        run: |
+#          VERSION=$(grep -m1 "^version" Cargo.toml | cut -d'"' -f2)
+#          mv /target/Sniffnet_LinuxDEB_${{ matrix.arch }}.deb /target/sniffnet_${VERSION}_${{ matrix.arch }}.deb
+#          sed -i -e "s/REPLACE_TAG/sniffnet_${VERSION}_${{ matrix.arch }}.deb/g" resources/packaging/linux/AppImage/sniffnet.yml
+#          sed -i -e 's/binary-${arch}/binary-${{ matrix.arch }}/g' pkg2appimage/functions.sh
+#
+#      - name: Repackage for AppImage
+#        shell: bash
+#        run: |
+#          cd pkg2appimage
+#          NO_GLIBC_VERSION=1 ARCH=${{ matrix.appimgarch }} FUNCTIONS_SH=$(pwd)/functions.sh ./pkg2appimage ../resources/packaging/linux/AppImage/sniffnet.yml
+#          mkdir /out
+#          mv out/*.AppImage /out/Sniffnet_LinuxAppImage_${{ matrix.arch }}.AppImage
+#
+#      - name: Upload package artifacts
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: appimage-${{ matrix.arch }}
+#          path: /out/
+#          if-no-files-found: error
+#
+#  rpm:
+#    runs-on: ubuntu-latest
+#    container:
+#      image: fedora:latest
+#    needs: build
+#    strategy:
+#      fail-fast: true
+#      matrix:
+#        include:
+#          - arch: x86_64
+#            target: x86_64-unknown-linux-gnu
+#          - arch: aarch64
+#            target: aarch64-unknown-linux-gnu
+#
+#    steps:
+#      - name: Checkout repository
+#        uses: actions/checkout@v6
+#
+#      - name: Install dependencies
+#        run: dnf update -y && dnf install -y @development-tools patchelf
+#
+#      - name: Install Rust
+#        uses: dtolnay/rust-toolchain@stable
+#        with:
+#          targets: ${{ matrix.target }}
+#
+#      - name: Install packaging tools
+#        run: cargo install cargo-generate-rpm
+#
+#      - uses: actions/download-artifact@v8
+#        with:
+#          name: build-ubuntu-${{ matrix.target }}
+#          path: target/
+#
+#      - name: Package for RPM-based Linux distros
+#        shell: bash
+#        run: |
+#          mkdir artifacts
+#          patchelf --replace-needed libpcap.so.0.8 libpcap.so.1 target/${{ matrix.target }}/release/sniffnet
+#          cargo generate-rpm --target ${{ matrix.target }}
+#          mv target/${{ matrix.target }}/generate-rpm/*.rpm artifacts/Sniffnet_LinuxRPM_${{ matrix.arch }}.rpm
+#
+#      - name: Upload package artifacts
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: rpm-${{ matrix.arch }}
+#          path: artifacts/
+#          if-no-files-found: error
+#
+#  dmg:
+#    runs-on: macos-latest
+#    needs: build
+#    strategy:
+#      fail-fast: true
+#      matrix:
+#        include:
+#          - arch: Intel
+#            target: x86_64-apple-darwin
+#          - arch: AppleSilicon
+#            target: aarch64-apple-darwin
+#
+#    steps:
+#      - name: Checkout repository
+#        uses: actions/checkout@v6
+#
+#      - name: Install Rust
+#        uses: dtolnay/rust-toolchain@stable
+#
+#      - name: Install packaging tools
+#        run: |
+#          cargo install toml-cli
+#          brew install create-dmg
+#
+#      - uses: actions/download-artifact@v8
+#        with:
+#          name: build-macos-${{ matrix.target }}
+#          path: target/
+#
+#      - name: Package for macOS
+#        shell: bash
+#        run: |
+#          VERSION=$(toml get Cargo.toml package.version --raw)
+#          sed -i'.bak' -e "s/0\.0\.0/${VERSION}/g" -e "s/fffffff/${GITHUB_SHA:0:7}/g" resources/packaging/macos/Info.plist
+#          mkdir artifacts
+#          mkdir -p target/release/bundle/osx/Sniffnet.app/Contents/{MacOS,Resources}
+#          cp resources/packaging/macos/Info.plist \
+#            target/release/bundle/osx/Sniffnet.app/Contents/
+#          cp resources/packaging/macos/graphics/sniffnet.icns \
+#            target/release/bundle/osx/Sniffnet.app/Contents/Resources/
+#          chmod +x target/${{ matrix.target }}/release/sniffnet
+#          cp target/${{ matrix.target }}/release/sniffnet \
+#            target/release/bundle/osx/Sniffnet.app/Contents/MacOS/
+#          cp resources/packaging/macos/wrapper.sh \
+#            target/release/bundle/osx/Sniffnet.app/Contents/MacOS/
+#          create-dmg \
+#            --volname "Sniffnet Installer" \
+#            --background "resources/packaging/macos/graphics/dmg_bg.png" \
+#            --window-pos 200 120 \
+#            --window-size 900 450 \
+#            --icon-size 100 \
+#            --app-drop-link 620 240 \
+#            --icon "Sniffnet.app" 300 240 \
+#            --hide-extension "Sniffnet.app" \
+#            "artifacts/Sniffnet_macOS_${{ matrix.arch }}.dmg" \
+#            "target/release/bundle/osx/"
+#
+#      - name: Upload package artifacts
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: dmg-${{ matrix.arch }}
+#          path: artifacts/
+#          if-no-files-found: error
+#
+#  msi:
+#    runs-on: windows-latest
+#    needs: build
+#    strategy:
+#      fail-fast: true
+#      matrix:
+#        include:
+#          - arch: x86
+#            target: i686-pc-windows-msvc
+#          - arch: x64
+#            target: x86_64-pc-windows-msvc
+#          - arch: arm64
+#            target: aarch64-pc-windows-msvc
+#
+#    steps:
+#      - name: Checkout repository
+#        uses: actions/checkout@v6
+#
+#      - name: Install dependencies
+#        shell: powershell
+#        run: |
+#          Write-Host "::group::WiX Toolset"
+#          Invoke-WebRequest `
+#            -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip" `
+#            -OutFile "$env:TEMP\wix-binaries.zip" -Verbose
+#          Expand-Archive -LiteralPath "$env:TEMP\wix-binaries.zip" -DestinationPath "$env:TEMP\wix" -Verbose
+#          Set-Item -Path env:Path -Value "$env:Path;$env:TEMP\wix"
+#          Write-Host "::endgroup::"
+#
+#      - name: Install Rust
+#        uses: dtolnay/rust-toolchain@stable
+#        with:
+#          targets: ${{ matrix.target }}
+#
+#      - name: Install packaging tools
+#        run: cargo install cargo-wix
+#
+#      - uses: actions/download-artifact@v8
+#        with:
+#          name: build-windows-${{ matrix.target }}
+#          path: target/
+#
+#      - name: Package for Microsoft Windows
+#        shell: powershell
+#        run: |
+#          New-Item -ItemType Directory -Path artifacts
+#          cargo wix --no-build --nocapture --target ${{ matrix.target }}
+#          Move-Item -Path target\wix\sniffnet*.msi -Destination .\artifacts\Sniffnet_Windows_${{ matrix.arch }}.msi
+#
+#      - name: Upload unsigned package artifacts
+#        id: upload-unsigned-artifact
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: msi-${{ matrix.arch }}
+#          path: artifacts/
+#          if-no-files-found: error
+#
+#      - name: Sign package artifacts
+#        uses: signpath/github-action-submit-signing-request@v2.2
+#        with:
+#          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+#          organization-id: '3b533e02-73c3-4908-a018-d09a34498a6a'
+#          project-slug: 'sniffnet'
+#          signing-policy-slug: 'release-signing'
+#          github-artifact-id: '${{ steps.upload-unsigned-artifact.outputs.artifact-id }}'
+#          wait-for-completion: true
+#          output-artifact-directory: './artifacts'
+#
+#      - name: Upload signed package artifacts (overwrite unsigned)
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: msi-${{ matrix.arch }}
+#          path: artifacts/
+#          if-no-files-found: error
+#          overwrite: true

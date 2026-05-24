@@ -1,4 +1,4 @@
 # sniffnet-agent
 
-Lightweight network flows exporter for Sniffnet.
+Lightweight network flows exporter compatible with Sniffnet.
 

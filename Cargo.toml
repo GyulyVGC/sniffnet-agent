@@ -3,7 +3,7 @@ name = "sniffnet-agent"
 version = "0.0.0"
 authors = ["Giuliano Bellini <gyulyvgc99@gmail.com>"]
 edition = "2024"
-description = "Lightweight network flows exporter for Sniffnet"
+description = "Lightweight network flows exporter compatible with Sniffnet"
 readme = "README.md"
 homepage = "https://sniffnet.net"
 repository = "https://github.com/GyulyVGC/sniffnet-agent"
@@ -13,12 +13,12 @@ keywords = ["filter", "network", "packet", "sniffer", "gui"]
 categories = ["visualization", "gui", "network-programming"]
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
-ctrlc = "3.4"
+clap = { version = "4.6.1", features = ["derive"] }
+ctrlc = "3.5.2"
 etherparse = "0.20.1"
 pcap = "2.4.0"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing = "0.1.144"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 
 [profile.release]
 lto = true

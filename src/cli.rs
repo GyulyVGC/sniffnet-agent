@@ -3,7 +3,10 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
 
 #[derive(Parser, Debug, Clone)]
-#[command(version, about = "Lightweight network flows exporter for Sniffnet")]
+#[command(
+    version,
+    about = "Lightweight network flows exporter compatible with Sniffnet"
+)]
 pub struct Args {
     /// Network interface to capture on (e.g. "en0", "eth0").
     #[arg(short, long)]
