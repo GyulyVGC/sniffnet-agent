@@ -6,7 +6,7 @@ use etherparse::{EtherType, LaxPacketHeaders, LinkHeader, NetHeaders, TransportH
 use pcap::{Active, Capture, Linktype};
 use tracing::{info, warn};
 
-use crate::cli::Args;
+use crate::cli::Config;
 use crate::flow::{FlowKey, FlowTable, FlowVal};
 
 struct Decoded {
@@ -16,17 +16,17 @@ struct Decoded {
     dst_mac: Option<[u8; 6]>,
 }
 
-pub fn open(args: &Args) -> Result<(Capture<Active>, Linktype), pcap::Error> {
-    let cap = open_capture(args)?;
+pub fn open(cfg: &Config) -> Result<(Capture<Active>, Linktype), pcap::Error> {
+    let cap = open_capture(cfg)?;
     let link_type = cap.get_datalink();
     if !link_type_is_supported(link_type) {
         warn!(
             "interface '{}' has link type {:?} which is not specifically handled; \
              falling back to Ethernet decode",
-            args.interface, link_type
+            cfg.interface, link_type
         );
     }
-    info!(interface = %args.interface, ?link_type, "capture started");
+    info!(interface = %cfg.interface, ?link_type, "capture started");
     Ok((cap, link_type))
 }
 
@@ -70,18 +70,18 @@ fn link_type_is_supported(lt: Linktype) -> bool {
     )
 }
 
-fn open_capture(args: &Args) -> Result<Capture<Active>, pcap::Error> {
+fn open_capture(cfg: &Config) -> Result<Capture<Active>, pcap::Error> {
     // pcap setup mirrors Sniffnet's live capture (capture_context.rs): buffered
     // mode + a 2 MB ring buffer trades sub-millisecond latency for throughput,
     // which is what we want for a 900 ms aggregation window.
-    let mut cap = Capture::from_device(args.interface.as_str())?
+    let mut cap = Capture::from_device(cfg.interface.as_str())?
         .promisc(false)
         .buffer_size(2_000_000)
         .snaplen(200)
         .immediate_mode(false)
         .timeout(150)
         .open()?;
-    if let Some(expr) = args
+    if let Some(expr) = cfg
         .filter
         .as_deref()
         .map(str::trim)

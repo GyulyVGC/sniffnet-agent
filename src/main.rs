@@ -1,14 +1,13 @@
 // TODO: improve logging
 // TODO: verbose logging including PCAP errors?
 // TODO: thoroughly check manifest, README, docs
-// TODO: add CLI arg to list interfaces and exit
 
 // TODO: dropped packets?
 // TODO: ICMP message types?
-// TODO: flow direction?
+// TODO: flow direction!!!
 // TODO: ARP support?
 // TODO: flow timestamps?
-// TODO: exporter identity? interfaceDescription maybe
+// TODO: exporter identity!!! interfaceDescription maybe
 // TODO: VLAN tags
 
 mod capture;
@@ -27,10 +26,10 @@ use crate::exporter::Exporter;
 use crate::flow::{FlowKey, FlowVal};
 
 fn main() {
-    let args = Args::parse();
-    init_logging(args.verbose);
+    let cfg = Args::parse().resolve();
+    init_logging(cfg.verbose);
 
-    let collector_addr = match args.collector_addr() {
+    let collector_addr = match cfg.collector_addr() {
         Ok(addr) => addr,
         Err(e) => {
             error!("{e}");
@@ -39,7 +38,7 @@ fn main() {
     };
 
     info!(
-        interface = %args.interface,
+        interface = %cfg.interface,
         collector = %collector_addr,
         "starting sniffnet-agent"
     );
@@ -57,10 +56,10 @@ fn main() {
         }
     };
 
-    let (cap, link_type) = match capture::open(&args) {
+    let (cap, link_type) = match capture::open(&cfg) {
         Ok(x) => x,
         Err(e) => {
-            error!("failed to open capture on '{}': {e}", args.interface);
+            error!("failed to open capture on '{}': {e}", cfg.interface);
             std::process::exit(1);
         }
     };
