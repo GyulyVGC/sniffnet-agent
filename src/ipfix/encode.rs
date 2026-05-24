@@ -5,9 +5,9 @@
 //!
 //! ```text
 //! [Message Header (16B)]
-//! [Template Set (84B)]?       <-- only in the first datagram when refresh due
-//! [Data Set v4 (4B + N*41)]?  <-- present only if there are v4 records
-//! [Data Set v6 (4B + N*65)]?  <-- present only if there are v6 records
+//! [Template Set (108B)]?      <-- only in the first datagram when refresh due
+//! [Data Set v4 (4B + N*58)]?  <-- present only if there are v4 records
+//! [Data Set v6 (4B + N*82)]?  <-- present only if there are v6 records
 //! ```
 //!
 //! Sequence number semantics follow RFC 7011 §3.1 (cumulative count of Data
@@ -166,6 +166,8 @@ fn write_common_tail(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
     });
     out.extend_from_slice(&val.bytes.to_be_bytes());
     out.extend_from_slice(&val.packets.to_be_bytes());
+    out.extend_from_slice(&val.first_seen_ms.to_be_bytes());
+    out.extend_from_slice(&val.last_seen_ms.to_be_bytes());
 }
 
 #[cfg(test)]
@@ -188,6 +190,8 @@ mod tests {
                 src_mac: Some([0xaa; 6]),
                 dst_mac: Some([0xbb; 6]),
                 direction: None,
+                first_seen_ms: 0,
+                last_seen_ms: 0,
             },
         )
     }
@@ -207,6 +211,8 @@ mod tests {
                 src_mac: None,
                 dst_mac: None,
                 direction: None,
+                first_seen_ms: 0,
+                last_seen_ms: 0,
             },
         )
     }
@@ -225,8 +231,8 @@ mod tests {
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         assert_eq!(dg[0..2], 0x000Au16.to_be_bytes(), "version");
-        // length back-patched: header(16) + data set header(4) + 1 v4 record(42) = 62
-        assert_eq!(u16::from_be_bytes([dg[2], dg[3]]), 62);
+        // length back-patched: header(16) + data set header(4) + 1 v4 record(58) = 78
+        assert_eq!(u16::from_be_bytes([dg[2], dg[3]]), 78);
         assert_eq!(dg[4..8], 0xDEADBEEFu32.to_be_bytes(), "export_time");
         assert_eq!(dg[8..12], 0x1122_3344u32.to_be_bytes(), "sequence");
         assert_eq!(dg[12..16], 0u32.to_be_bytes(), "odid");
@@ -262,6 +268,8 @@ mod tests {
             src_mac: Some([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
             dst_mac: Some([0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]),
             direction: Some(crate::direction::FlowDirection::Outgoing),
+            first_seen_ms: 0x1111_2222_3333_4444,
+            last_seen_ms: 0x5555_6666_7777_8888,
         };
         let (out, _) = build_datagrams(&[(key, val)], 0, false, 0);
         let dg = &out[0];
@@ -280,6 +288,8 @@ mod tests {
             [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
         );
         assert_eq!(rec[34..42], 0x00FFu64.to_be_bytes());
+        assert_eq!(rec[42..50], 0x1111_2222_3333_4444u64.to_be_bytes());
+        assert_eq!(rec[50..58], 0x5555_6666_7777_8888u64.to_be_bytes());
     }
 
     #[test]
@@ -297,6 +307,8 @@ mod tests {
             src_mac: None,
             dst_mac: None,
             direction: dir,
+            first_seen_ms: 0,
+            last_seen_ms: 0,
         };
         let cases = [
             (Some(crate::direction::FlowDirection::Incoming), 0x00),
@@ -319,8 +331,8 @@ mod tests {
 
     #[test]
     fn sequence_number_carries_across_messages() {
-        // At mtu=1400 a no-template datagram fits floor((1400 - 16 - 4) / 42) = 32 v4
-        // records. 67 records therefore splits into 32 + 32 + 3 across three datagrams.
+        // At mtu=1400 a no-template datagram fits floor((1400 - 16 - 4) / 58) = 23 v4
+        // records. 67 records therefore splits into 23 + 23 + 21 across three datagrams.
         let flows: Vec<_> = (0..67)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
@@ -332,11 +344,11 @@ mod tests {
         );
         assert_eq!(
             u32::from_be_bytes([out[1][8], out[1][9], out[1][10], out[1][11]]),
-            32
+            23
         );
         assert_eq!(
             u32::from_be_bytes([out[2][8], out[2][9], out[2][10], out[2][11]]),
-            64
+            46
         );
         assert_eq!(seq, 67);
     }

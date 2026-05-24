@@ -27,6 +27,8 @@ impl FlowKey {
 /// carries no MACs or when no MAC has been observed yet for this flow; the
 /// encoder writes all-zero on the wire in that case. `direction` is `None`
 /// while the flow is accumulating and is filled in after drain.
+/// `first_seen_ms` / `last_seen_ms` are kernel packet timestamps (ms since
+/// UNIX epoch) from libpcap — emitted as IPFIX IE 152 / 153.
 #[derive(Debug, Clone, Copy)]
 pub struct FlowVal {
     pub bytes: u64,
@@ -34,6 +36,8 @@ pub struct FlowVal {
     pub src_mac: Option<[u8; 6]>,
     pub dst_mac: Option<[u8; 6]>,
     pub direction: Option<FlowDirection>,
+    pub first_seen_ms: u64,
+    pub last_seen_ms: u64,
 }
 
 impl FlowVal {
@@ -70,6 +74,7 @@ impl FlowTable {
         bytes: u64,
         src_mac: Option<[u8; 6]>,
         dst_mac: Option<[u8; 6]>,
+        ts_ms: u64,
     ) {
         self.inner
             .entry(key)
@@ -82,6 +87,12 @@ impl FlowTable {
                 if val.dst_mac.is_none() {
                     val.dst_mac = dst_mac;
                 }
+                if ts_ms < val.first_seen_ms {
+                    val.first_seen_ms = ts_ms;
+                }
+                if ts_ms > val.last_seen_ms {
+                    val.last_seen_ms = ts_ms;
+                }
             })
             .or_insert(FlowVal {
                 bytes,
@@ -89,6 +100,8 @@ impl FlowTable {
                 src_mac,
                 dst_mac,
                 direction: None,
+                first_seen_ms: ts_ms,
+                last_seen_ms: ts_ms,
             });
     }
 
@@ -126,8 +139,8 @@ mod tests {
     fn record_accumulates_bytes_and_packets() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 100, Some([1; 6]), Some([2; 6]));
-        table.record(k, 50, None, None);
+        table.record(k, 100, Some([1; 6]), Some([2; 6]), 1_000);
+        table.record(k, 50, None, None, 2_500);
 
         let flows = table.drain();
         assert_eq!(flows.len(), 1);
@@ -136,13 +149,15 @@ mod tests {
         assert_eq!(state.packets, 2);
         assert_eq!(state.src_mac, Some([1; 6]));
         assert_eq!(state.dst_mac, Some([2; 6]));
+        assert_eq!(state.first_seen_ms, 1_000);
+        assert_eq!(state.last_seen_ms, 2_500);
     }
 
     #[test]
     fn drain_empties_the_table() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 100, None, None);
+        table.record(k, 100, None, None, 0);
 
         let first = table.drain();
         assert_eq!(first.len(), 1);
@@ -155,10 +170,10 @@ mod tests {
     #[test]
     fn record_after_drain_creates_fresh_entry() {
         let mut table = FlowTable::new();
-        table.record(key(1, 2), 100, None, None);
-        table.record(key(3, 4), 200, None, None);
+        table.record(key(1, 2), 100, None, None, 0);
+        table.record(key(3, 4), 200, None, None, 0);
         let _ = table.drain();
-        table.record(key(3, 4), 50, None, None);
+        table.record(key(3, 4), 50, None, None, 0);
 
         let flows = table.drain();
         assert_eq!(flows.len(), 1);
@@ -170,11 +185,23 @@ mod tests {
     fn record_does_not_clobber_existing_mac() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 100, Some([0xaa; 6]), Some([0xbb; 6]));
-        table.record(k, 100, Some([0xcc; 6]), Some([0xdd; 6]));
+        table.record(k, 100, Some([0xaa; 6]), Some([0xbb; 6]), 0);
+        table.record(k, 100, Some([0xcc; 6]), Some([0xdd; 6]), 0);
         let flows = table.drain();
         assert_eq!(flows[&k].src_mac, Some([0xaa; 6]));
         assert_eq!(flows[&k].dst_mac, Some([0xbb; 6]));
+    }
+
+    #[test]
+    fn record_first_and_last_track_min_max() {
+        let mut table = FlowTable::new();
+        let k = key(1, 2);
+        table.record(k, 1, None, None, 5_000);
+        table.record(k, 1, None, None, 3_000); // out-of-order earlier packet
+        table.record(k, 1, None, None, 7_000);
+        let flows = table.drain();
+        assert_eq!(flows[&k].first_seen_ms, 3_000);
+        assert_eq!(flows[&k].last_seen_ms, 7_000);
     }
 
     #[test]
@@ -232,6 +259,8 @@ mod tests {
             src_mac: None,
             dst_mac: None,
             direction: None,
+            first_seen_ms: 0,
+            last_seen_ms: 0,
         };
         let by_key: std::collections::HashMap<_, _> = [(outgoing, val), (incoming, val)]
             .into_iter()
@@ -249,6 +278,8 @@ mod tests {
             src_mac: None,
             dst_mac: None,
             direction: None,
+            first_seen_ms: 0,
+            last_seen_ms: 0,
         };
         let annotated = val.with_direction(&key(1, 2), &[]);
         assert_eq!(annotated.direction, None);

@@ -5,7 +5,6 @@
 // TODO: dropped packets
 // TODO: ICMP message types
 // TODO: ARP support
-// TODO: flow timestamps (?)
 // TODO: exporter identity!!! interfaceDescription maybe
 // TODO: VLAN tags
 
