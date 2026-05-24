@@ -85,6 +85,7 @@ mod tests {
                 packets: 1,
                 src_mac: None,
                 dst_mac: None,
+                direction: None,
             },
         )
     }
@@ -102,15 +103,15 @@ mod tests {
 
         let mut buf = [0u8; 2048];
         let (n, _) = recv.recv_from(&mut buf).unwrap();
-        // first datagram: header(16) + template set(84) + data set(4 + 41) = 145
-        assert_eq!(n, 145);
+        // first datagram: header(16) + template set(92) + data set(4 + 42) = 154
+        assert_eq!(n, 154);
         // set after header should be the Template Set (id=2)
         assert_eq!(u16::from_be_bytes([buf[16], buf[17]]), 2);
 
         exp.flush(&vec![flow(2)]).unwrap();
         let (n2, _) = recv.recv_from(&mut buf).unwrap();
-        // second datagram should NOT include templates: 16 + 4 + 41 = 61
-        assert_eq!(n2, 61);
+        // second datagram should NOT include templates: 16 + 4 + 42 = 62
+        assert_eq!(n2, 62);
         assert_eq!(u16::from_be_bytes([buf[16], buf[17]]), 256);
     }
 

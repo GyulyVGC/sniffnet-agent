@@ -1,4 +1,5 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
@@ -30,19 +31,14 @@ pub fn open(cfg: &Config) -> Result<(Capture<Active>, Linktype), pcap::Error> {
     Ok((cap, link_type))
 }
 
-pub fn run(
-    mut cap: Capture<Active>,
-    link_type: Linktype,
-    tx: &Sender<Vec<(FlowKey, FlowVal)>>,
-    exclude: SocketAddr,
-) {
+pub fn run(mut cap: Capture<Active>, link_type: Linktype, tx: &Sender<HashMap<FlowKey, FlowVal>>) {
     let mut table = FlowTable::new();
     let interval = Duration::from_millis(900);
     let mut last_drain = Instant::now();
 
     loop {
         if last_drain.elapsed() >= interval {
-            if tx.send(table.drain(exclude)).is_err() {
+            if tx.send(table.drain()).is_err() {
                 return;
             }
             last_drain = Instant::now();

@@ -159,6 +159,11 @@ fn write_common_tail(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
     out.push(key.protocol);
     out.extend_from_slice(&val.src_mac.unwrap_or([0; 6]));
     out.extend_from_slice(&val.dst_mac.unwrap_or([0; 6]));
+    out.push(match val.direction {
+        Some(crate::direction::FlowDirection::Incoming) => 0x00,
+        Some(crate::direction::FlowDirection::Outgoing) => 0x01,
+        None => 0xFF,
+    });
     out.extend_from_slice(&val.bytes.to_be_bytes());
     out.extend_from_slice(&val.packets.to_be_bytes());
 }
@@ -182,6 +187,7 @@ mod tests {
                 packets,
                 src_mac: Some([0xaa; 6]),
                 dst_mac: Some([0xbb; 6]),
+                direction: None,
             },
         )
     }
@@ -200,6 +206,7 @@ mod tests {
                 packets,
                 src_mac: None,
                 dst_mac: None,
+                direction: None,
             },
         )
     }
@@ -218,8 +225,8 @@ mod tests {
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         assert_eq!(dg[0..2], 0x000Au16.to_be_bytes(), "version");
-        // length back-patched: header(16) + data set header(4) + 1 v4 record(41) = 61
-        assert_eq!(u16::from_be_bytes([dg[2], dg[3]]), 61);
+        // length back-patched: header(16) + data set header(4) + 1 v4 record(42) = 62
+        assert_eq!(u16::from_be_bytes([dg[2], dg[3]]), 62);
         assert_eq!(dg[4..8], 0xDEADBEEFu32.to_be_bytes(), "export_time");
         assert_eq!(dg[8..12], 0x1122_3344u32.to_be_bytes(), "sequence");
         assert_eq!(dg[12..16], 0u32.to_be_bytes(), "odid");
@@ -254,6 +261,7 @@ mod tests {
             packets: 0x00FF,
             src_mac: Some([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
             dst_mac: Some([0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]),
+            direction: Some(crate::direction::FlowDirection::Outgoing),
         };
         let (out, _) = build_datagrams(&[(key, val)], 0, false, 0);
         let dg = &out[0];
@@ -266,11 +274,40 @@ mod tests {
         assert_eq!(rec[12], 6);
         assert_eq!(rec[13..19], [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         assert_eq!(rec[19..25], [0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]);
+        assert_eq!(rec[25], 0x01, "flowDirection egress");
         assert_eq!(
-            rec[25..33],
+            rec[26..34],
             [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
         );
-        assert_eq!(rec[33..41], 0x00FFu64.to_be_bytes());
+        assert_eq!(rec[34..42], 0x00FFu64.to_be_bytes());
+    }
+
+    #[test]
+    fn direction_byte_encodes_all_three_states() {
+        let key = FlowKey {
+            src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+            src_port: 1234,
+            dst_port: 80,
+            protocol: 6,
+        };
+        let make = |dir| FlowVal {
+            bytes: 1,
+            packets: 1,
+            src_mac: None,
+            dst_mac: None,
+            direction: dir,
+        };
+        let cases = [
+            (Some(crate::direction::FlowDirection::Incoming), 0x00),
+            (Some(crate::direction::FlowDirection::Outgoing), 0x01),
+            (None, 0xFF),
+        ];
+        for (dir, expected) in cases {
+            let (out, _) = build_datagrams(&[(key, make(dir))], 0, false, 0);
+            // Byte offset for flowDirection: header(16) + set hdr(4) + 4+4+2+2+1+6+6 = 45.
+            assert_eq!(out[0][45], expected, "dir {:?}", dir);
+        }
     }
 
     #[test]
@@ -282,8 +319,8 @@ mod tests {
 
     #[test]
     fn sequence_number_carries_across_messages() {
-        // At mtu=1400 a no-template datagram fits floor((1400 - 16 - 4) / 41) = 33 v4
-        // records. 67 records therefore splits into 33 + 33 + 1 across three datagrams.
+        // At mtu=1400 a no-template datagram fits floor((1400 - 16 - 4) / 42) = 32 v4
+        // records. 67 records therefore splits into 32 + 32 + 3 across three datagrams.
         let flows: Vec<_> = (0..67)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
@@ -295,11 +332,11 @@ mod tests {
         );
         assert_eq!(
             u32::from_be_bytes([out[1][8], out[1][9], out[1][10], out[1][11]]),
-            33
+            32
         );
         assert_eq!(
             u32::from_be_bytes([out[2][8], out[2][9], out[2][10], out[2][11]]),
-            66
+            64
         );
         assert_eq!(seq, 67);
     }

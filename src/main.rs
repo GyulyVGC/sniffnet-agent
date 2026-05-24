@@ -2,26 +2,28 @@
 // TODO: verbose logging including PCAP errors?
 // TODO: thoroughly check manifest, README, docs
 
-// TODO: dropped packets?
-// TODO: ICMP message types?
-// TODO: flow direction!!!
-// TODO: ARP support?
-// TODO: flow timestamps?
+// TODO: dropped packets
+// TODO: ICMP message types
+// TODO: ARP support
+// TODO: flow timestamps (?)
 // TODO: exporter identity!!! interfaceDescription maybe
 // TODO: VLAN tags
 
 mod capture;
 mod cli;
+mod direction;
 mod exporter;
 mod flow;
 mod ipfix;
 
 use clap::Parser;
+use std::collections::HashMap;
 use std::sync::mpsc;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::Args;
+use crate::direction::interface_addresses;
 use crate::exporter::Exporter;
 use crate::flow::{FlowKey, FlowVal};
 
@@ -64,17 +66,22 @@ fn main() {
         }
     };
 
-    let (tx, rx) = mpsc::channel::<Vec<(FlowKey, FlowVal)>>();
+    let (tx, rx) = mpsc::channel::<HashMap<FlowKey, FlowVal>>();
     if let Err(e) = std::thread::Builder::new()
         .name("capture".into())
-        .spawn(move || capture::run(cap, link_type, &tx, collector_addr))
+        .spawn(move || capture::run(cap, link_type, &tx))
     {
         error!("failed to spawn capture thread: {e}");
         std::process::exit(1);
     }
 
-    // Main thread exports each set of flows delivered by the capture thread.
-    for flows in rx {
+    for flow_map in rx {
+        let addrs = interface_addresses(&cfg.interface);
+        let flows: Vec<_> = flow_map
+            .into_iter()
+            .filter(|(key, _)| !key.is_self_export(collector_addr))
+            .map(|(k, v)| (k, v.with_direction(&k, &addrs)))
+            .collect();
         run_flush(&mut exporter, &flows);
     }
 }
