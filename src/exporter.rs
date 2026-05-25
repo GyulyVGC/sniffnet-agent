@@ -2,8 +2,6 @@ use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tracing::warn;
-
 use crate::flow::{FlowKey, FlowVal};
 use crate::ipfix::encode::build_datagrams;
 
@@ -48,7 +46,7 @@ impl Exporter {
         let mut last_err: Option<io::Error> = None;
         for dg in &datagrams {
             if let Err(e) = self.sock.send(dg) {
-                warn!("UDP send failed: {e}");
+                log::warn!("UDP send failed: {e}");
                 last_err = Some(e);
             }
         }

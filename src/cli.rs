@@ -1,5 +1,5 @@
 use clap::Parser;
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::{BufRead, IsTerminal};
 use std::net::{SocketAddr, ToSocketAddrs};
 
 #[derive(Parser, Debug, Clone)]
@@ -80,14 +80,13 @@ fn prompt_interface() -> String {
         eprintln!("no network interfaces available");
         std::process::exit(1);
     }
-    println!("Available network interfaces:");
+    eprintln!("Available network interfaces:");
     for (i, d) in devices.iter().enumerate() {
         let desc = d.desc.as_deref().unwrap_or("");
-        println!("  {}) {}\t{desc}", i + 1, d.name);
+        eprintln!("  {}) {}\t{desc}", i + 1, d.name);
     }
     loop {
-        print!("Choose one (1-{}): ", devices.len());
-        std::io::stdout().flush().ok();
+        eprint!("Choose one (1-{}): ", devices.len());
         match read_line().parse::<usize>() {
             Ok(n) if (1..=devices.len()).contains(&n) => return devices[n - 1].name.clone(),
             _ => eprintln!(
@@ -101,8 +100,7 @@ fn prompt_interface() -> String {
 fn prompt_collector() -> String {
     require_tty("collector");
     loop {
-        print!("Collector address (HOST:PORT): ");
-        std::io::stdout().flush().ok();
+        eprint!("Collector address (HOST:PORT): ");
         let input = read_line();
         match input.to_socket_addrs() {
             Ok(mut addrs) => {

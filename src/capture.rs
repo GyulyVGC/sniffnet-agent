@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 
 use etherparse::{EtherType, LaxPacketHeaders, LinkHeader, NetHeaders, TransportHeader};
 use pcap::{Active, Capture, Linktype};
-use tracing::{info, warn};
 
 use crate::cli::Config;
 use crate::flow::{FlowKey, FlowTable, FlowVal};
@@ -21,13 +20,17 @@ pub fn open(cfg: &Config) -> Result<(Capture<Active>, Linktype), pcap::Error> {
     let cap = open_capture(cfg)?;
     let link_type = cap.get_datalink();
     if !link_type_is_supported(link_type) {
-        warn!(
+        log::warn!(
             "interface '{}' has link type {:?} which is not specifically handled; \
              falling back to Ethernet decode",
-            cfg.interface, link_type
+            cfg.interface,
+            link_type
         );
     }
-    info!(interface = %cfg.interface, ?link_type, "capture started");
+    log::info!(
+        "capture started: interface={}, link_type={link_type:?}",
+        cfg.interface
+    );
     Ok((cap, link_type))
 }
 
@@ -44,12 +47,17 @@ pub fn run(mut cap: Capture<Active>, link_type: Linktype, tx: &Sender<HashMap<Fl
             last_drain = Instant::now();
         }
 
-        if let Ok(packet) = cap.next_packet()
-            && let Some(d) = decode_packet(packet.data, link_type)
-        {
-            let ts = packet.header.ts;
-            let ts_ms = (ts.tv_sec as u64).saturating_mul(1_000) + (ts.tv_usec as u64) / 1_000;
-            table.record(d.key, d.bytes, d.src_mac, d.dst_mac, ts_ms);
+        match cap.next_packet() {
+            Ok(packet) => {
+                if let Some(d) = decode_packet(packet.data, link_type) {
+                    let ts = packet.header.ts;
+                    let ts_ms =
+                        (ts.tv_sec as u64).saturating_mul(1_000) + (ts.tv_usec as u64) / 1_000;
+                    table.record(d.key, d.bytes, d.src_mac, d.dst_mac, ts_ms);
+                }
+            }
+            Err(pcap::Error::TimeoutExpired) => {}
+            Err(e) => log::debug!("next_packet error: {e}"),
         }
     }
 }
