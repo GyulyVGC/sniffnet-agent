@@ -37,14 +37,14 @@ fn main() {
     };
 
     log::info!(
-        "starting sniffnet-agent: interface={}, collector={collector_addr}",
+        "starting sniffnet-agent: interface='{}', collector='{collector_addr}'",
         cfg.interface
     );
 
     let mut exporter = match Exporter::connect(collector_addr) {
         Ok(e) => e,
         Err(e) => {
-            log::error!("failed to connect exporter to {collector_addr}: {e}");
+            log::error!("failed to connect exporter to '{collector_addr}': {e}");
             std::process::exit(1);
         }
     };

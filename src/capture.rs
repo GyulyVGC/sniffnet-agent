@@ -22,13 +22,12 @@ pub fn open(cfg: &Config) -> Result<(Capture<Active>, Linktype), pcap::Error> {
     let lt_label = link_type_label(link_type);
     if !link_type_is_supported(link_type) {
         log::warn!(
-            "interface '{}' has link type {lt_label} which is not specifically handled; \
-             falling back to Ethernet decode",
+            "unsupported link type '{lt_label}' on '{}'; decoding as Ethernet",
             cfg.interface,
         );
     }
     log::info!(
-        "capture started: interface={}, link_type={lt_label}",
+        "capture started: interface='{}', link_type='{lt_label}'",
         cfg.interface
     );
     Ok((cap, link_type))
