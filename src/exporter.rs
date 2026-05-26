@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::flow::{FlowKey, FlowVal};
@@ -14,8 +14,8 @@ pub struct Exporter {
 impl Exporter {
     pub fn connect(addr: SocketAddr) -> io::Result<Self> {
         let bind_addr: SocketAddr = match addr {
-            SocketAddr::V4(_) => "0.0.0.0:0".parse().unwrap(),
-            SocketAddr::V6(_) => "[::]:0".parse().unwrap(),
+            SocketAddr::V4(_) => SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+            SocketAddr::V6(_) => SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
         };
         let sock = UdpSocket::bind(bind_addr)?;
         sock.connect(addr)?;
@@ -35,7 +35,13 @@ impl Exporter {
             Some(t) => t.elapsed() >= Duration::from_secs(30),
         };
         let now_unix = unix_seconds();
-        let (datagrams, new_seq) = build_datagrams(flows, self.seq, include_template_set, now_unix);
+        let (datagrams, new_seq) = build_datagrams(flows, self.seq, include_template_set, now_unix)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "an error occurred while building datagrams",
+                )
+            })?;
         if include_template_set {
             self.last_template_send = Some(Instant::now());
         }

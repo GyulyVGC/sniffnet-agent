@@ -30,7 +30,7 @@ pub fn build_datagrams(
     seq_start: u32,
     mut include_template_set: bool,
     now_unix: u32,
-) -> (Vec<Vec<u8>>, u32) {
+) -> Option<(Vec<Vec<u8>>, u32)> {
     let mtu: usize = 1400;
 
     let mut v4: Vec<&(FlowKey, FlowVal)> = Vec::new();
@@ -71,9 +71,10 @@ pub fn build_datagrams(
             if take > 0 {
                 write_data_set(&mut buf, TEMPLATE_ID_V4, take * RECORD_SIZE_V4, |out| {
                     for flow in &v4[v4_idx..v4_idx + take] {
-                        write_v4_record(out, &flow.0, &flow.1);
+                        write_v4_record(out, &flow.0, &flow.1)?;
                     }
-                });
+                    Some(())
+                })?;
                 v4_idx += take;
                 records_in_msg += take as u32;
             }
@@ -86,19 +87,23 @@ pub fn build_datagrams(
             if take > 0 {
                 write_data_set(&mut buf, TEMPLATE_ID_V6, take * RECORD_SIZE_V6, |out| {
                     for flow in &v6[v6_idx..v6_idx + take] {
-                        write_v6_record(out, &flow.0, &flow.1);
+                        write_v6_record(out, &flow.0, &flow.1)?;
                     }
-                });
+                    Some(())
+                })?;
                 v6_idx += take;
                 records_in_msg += take as u32;
             }
         }
 
-        debug_assert!(records_in_msg > 0, "encoder made no forward progress");
+        // Defensive: if nothing was packed we'd loop forever on the same indices.
+        // Bail out with None so the caller surfaces it instead of hanging.
+        if records_in_msg == 0 {
+            return None;
+        }
 
         // Back-patch message length (offsets 2..4).
-        let total_len = u16::try_from(buf.len()).expect("datagram exceeds u16 length");
-        let len_be = total_len.to_be_bytes();
+        let len_be = u16::try_from(buf.len()).ok()?.to_be_bytes();
         buf[2] = len_be[0];
         buf[3] = len_be[1];
 
@@ -106,51 +111,45 @@ pub fn build_datagrams(
         datagrams.push(buf);
     }
 
-    (datagrams, seq)
+    Some((datagrams, seq))
 }
 
 fn write_data_set(
     out: &mut Vec<u8>,
     set_id: u16,
     payload_len: usize,
-    write_payload: impl FnOnce(&mut Vec<u8>),
-) {
+    write_payload: impl FnOnce(&mut Vec<u8>) -> Option<()>,
+) -> Option<()> {
     let set_len = SET_HEADER_LEN + payload_len;
     out.extend_from_slice(&set_id.to_be_bytes());
     out.extend_from_slice(&(set_len as u16).to_be_bytes());
-    write_payload(out);
+    write_payload(out)
 }
 
-fn write_v4_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
+fn write_v4_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) -> Option<()> {
     let IpAddr::V4(src) = key.src_ip else {
-        unreachable!("v4 bucket only contains v4 source addresses");
+        return None;
     };
     let IpAddr::V4(dst) = key.dst_ip else {
-        // If src is v4 but dst is v6 we have a misconfigured flow; emit zero
-        // address rather than panic. Capture pipeline rejects mixed-family flows.
-        out.extend_from_slice(&src.octets());
-        out.extend_from_slice(&[0u8; 4]);
-        write_common_tail(out, key, val);
-        return;
+        return None;
     };
     out.extend_from_slice(&src.octets());
     out.extend_from_slice(&dst.octets());
     write_common_tail(out, key, val);
+    Some(())
 }
 
-fn write_v6_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
+fn write_v6_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) -> Option<()> {
     let IpAddr::V6(src) = key.src_ip else {
-        unreachable!("v6 bucket only contains v6 source addresses");
+        return None;
     };
     let IpAddr::V6(dst) = key.dst_ip else {
-        out.extend_from_slice(&src.octets());
-        out.extend_from_slice(&[0u8; 16]);
-        write_common_tail(out, key, val);
-        return;
+        return None;
     };
     out.extend_from_slice(&src.octets());
     out.extend_from_slice(&dst.octets());
     write_common_tail(out, key, val);
+    Some(())
 }
 
 fn write_common_tail(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
@@ -219,7 +218,7 @@ mod tests {
 
     #[test]
     fn empty_flows_produces_no_datagrams() {
-        let (out, seq) = build_datagrams(&[], 0, false, 12345);
+        let (out, seq) = build_datagrams(&[], 0, false, 12345).unwrap();
         assert!(out.is_empty());
         assert_eq!(seq, 0);
     }
@@ -227,7 +226,7 @@ mod tests {
     #[test]
     fn header_layout_is_exact() {
         let s = [v4_flow(1, 2, 100, 5)];
-        let (out, _) = build_datagrams(&s, 0x1122_3344, false, 0xDEADBEEF);
+        let (out, _) = build_datagrams(&s, 0x1122_3344, false, 0xDEADBEEF).unwrap();
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         assert_eq!(dg[0..2], 0x000Au16.to_be_bytes(), "version");
@@ -243,7 +242,7 @@ mod tests {
         let flows: Vec<_> = (0..50)
             .map(|i| v4_flow(i as u8, (i + 1) as u8, 100, 1))
             .collect();
-        let (out, _) = build_datagrams(&flows, 0, true, 0);
+        let (out, _) = build_datagrams(&flows, 0, true, 0).unwrap();
         assert!(out.len() >= 2);
         // first datagram should contain template set id (2) right after header
         let first_set_id = u16::from_be_bytes([out[0][16], out[0][17]]);
@@ -271,7 +270,7 @@ mod tests {
             first_seen_ms: 0x1111_2222_3333_4444,
             last_seen_ms: 0x5555_6666_7777_8888,
         };
-        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0);
+        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0).unwrap();
         let dg = &out[0];
         // Skip 16B header + 4B data set header = 20B prefix.
         let rec = &dg[20..20 + RECORD_SIZE_V4];
@@ -316,7 +315,7 @@ mod tests {
             (None, 0xFF),
         ];
         for (dir, expected) in cases {
-            let (out, _) = build_datagrams(&[(key, make(dir))], 0, false, 0);
+            let (out, _) = build_datagrams(&[(key, make(dir))], 0, false, 0).unwrap();
             // Byte offset for flowDirection: header(16) + set hdr(4) + 4+4+2+2+1+6+6 = 45.
             assert_eq!(out[0][45], expected, "dir {:?}", dir);
         }
@@ -325,7 +324,7 @@ mod tests {
     #[test]
     fn sequence_number_advances_by_record_count() {
         let flows = vec![v4_flow(1, 2, 100, 1), v4_flow(3, 4, 200, 1)];
-        let (_, seq) = build_datagrams(&flows, 100, false, 0);
+        let (_, seq) = build_datagrams(&flows, 100, false, 0).unwrap();
         assert_eq!(seq, 102);
     }
 
@@ -336,7 +335,7 @@ mod tests {
         let flows: Vec<_> = (0..67)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
-        let (out, seq) = build_datagrams(&flows, 0, false, 0);
+        let (out, seq) = build_datagrams(&flows, 0, false, 0).unwrap();
         assert_eq!(out.len(), 3);
         assert_eq!(
             u32::from_be_bytes([out[0][8], out[0][9], out[0][10], out[0][11]]),
@@ -356,7 +355,7 @@ mod tests {
     #[test]
     fn sequence_number_wraps_modulo_2_32() {
         let flows = vec![v4_flow(1, 2, 100, 1), v4_flow(3, 4, 100, 1)];
-        let (_, seq) = build_datagrams(&flows, u32::MAX - 1, false, 0);
+        let (_, seq) = build_datagrams(&flows, u32::MAX - 1, false, 0).unwrap();
         assert_eq!(seq, 0);
     }
 
@@ -365,7 +364,7 @@ mod tests {
         let flows: Vec<_> = (0..200)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
-        let (out, seq) = build_datagrams(&flows, 0, false, 0);
+        let (out, seq) = build_datagrams(&flows, 0, false, 0).unwrap();
         assert_eq!(seq, 200);
         // Sum the records reported in each datagram's message length.
         let mut total_records = 0u32;
@@ -383,7 +382,7 @@ mod tests {
     #[test]
     fn v4_and_v6_share_a_datagram_when_room_allows() {
         let flows = vec![v4_flow(1, 2, 100, 1), v6_flow(200, 2)];
-        let (out, _) = build_datagrams(&flows, 0, false, 0);
+        let (out, _) = build_datagrams(&flows, 0, false, 0).unwrap();
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         // After 16B header: v4 data set (4 + 41 = 45B) then v6 data set (4 + 65 = 69B)
@@ -401,8 +400,8 @@ mod tests {
     #[test]
     fn include_template_set_flag_drives_first_datagram_layout() {
         let flows = [v4_flow(1, 2, 100, 1)];
-        let (with, _) = build_datagrams(&flows, 0, true, 0);
-        let (without, _) = build_datagrams(&flows, 0, false, 0);
+        let (with, _) = build_datagrams(&flows, 0, true, 0).unwrap();
+        let (without, _) = build_datagrams(&flows, 0, false, 0).unwrap();
         // With template, the first set is the template set (id=2)
         let with_id = u16::from_be_bytes([with[0][16], with[0][17]]);
         let without_id = u16::from_be_bytes([without[0][16], without[0][17]]);

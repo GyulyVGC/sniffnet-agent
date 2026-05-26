@@ -55,11 +55,6 @@ const V6_FIELDS: &[(u16, u16)] = &[
     (IE_FLOW_END_MILLISECONDS, 8),
 ];
 
-/// Template set length (set header + both template records) per RFC 7011 §3.4.1.
-/// Set header (4) + template record header (4) + 12 fields × 4 bytes,
-/// twice over for the two templates: 4 + 2 × (4 + 48) = 108.
-pub const TEMPLATE_SET_LEN: usize = 108;
-
 /// Write the combined Template Set (containing both templates) to `out`.
 /// The set header carries `set_id=2` and the set length includes itself.
 pub fn write_template_set(out: &mut Vec<u8>) {
@@ -72,7 +67,6 @@ pub fn write_template_set(out: &mut Vec<u8>) {
     write_template_record(out, super::TEMPLATE_ID_V6, V6_FIELDS);
 
     let set_len = out.len() - start;
-    debug_assert_eq!(set_len, TEMPLATE_SET_LEN);
     let len_be = (set_len as u16).to_be_bytes();
     out[start + 2] = len_be[0];
     out[start + 3] = len_be[1];
@@ -134,7 +128,7 @@ mod tests {
     fn template_set_matches_spec_bytes() {
         let mut buf = Vec::new();
         write_template_set(&mut buf);
-        assert_eq!(buf.len(), TEMPLATE_SET_LEN);
+        assert_eq!(buf.len(), 108);
         assert_eq!(buf, EXPECTED);
     }
 }

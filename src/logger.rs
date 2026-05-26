@@ -59,6 +59,6 @@ pub fn init_logger(verbose: bool) {
     let logger = LOGGER.get_or_init(|| Logger {
         colored: detect_color(),
     });
-    log::set_logger(logger).unwrap();
+    let _ = log::set_logger(logger);
     log::set_max_level(level);
 }
