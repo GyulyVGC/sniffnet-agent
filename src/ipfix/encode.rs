@@ -76,7 +76,7 @@ pub fn build_datagrams(
                     Some(())
                 })?;
                 v4_idx += take;
-                records_in_msg += take as u32;
+                records_in_msg += u32::try_from(take).ok()?;
             }
         }
 
@@ -92,7 +92,7 @@ pub fn build_datagrams(
                     Some(())
                 })?;
                 v6_idx += take;
-                records_in_msg += take as u32;
+                records_in_msg += u32::try_from(take).ok()?;
             }
         }
 
@@ -122,7 +122,7 @@ fn write_data_set(
 ) -> Option<()> {
     let set_len = SET_HEADER_LEN + payload_len;
     out.extend_from_slice(&set_id.to_be_bytes());
-    out.extend_from_slice(&(set_len as u16).to_be_bytes());
+    out.extend_from_slice(&u16::try_from(set_len).ok()?.to_be_bytes());
     write_payload(out)
 }
 

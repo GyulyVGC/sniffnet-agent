@@ -51,8 +51,8 @@ pub fn run(mut cap: Capture<Active>, link_type: Linktype, tx: &Sender<HashMap<Fl
             Ok(packet) => {
                 if let Some(d) = decode_packet(packet.data, link_type) {
                     let ts = packet.header.ts;
-                    let ts_ms =
-                        (ts.tv_sec as u64).saturating_mul(1_000) + (ts.tv_usec as u64) / 1_000;
+                    let ts_ms = ts.tv_sec.cast_unsigned().saturating_mul(1_000)
+                        + u64::from(ts.tv_usec.cast_unsigned()) / 1_000;
                     table.record(d.key, d.bytes, d.src_mac, d.dst_mac, ts_ms);
                 }
             }

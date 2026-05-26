@@ -66,7 +66,7 @@ impl Exporter {
 fn unix_seconds() -> u32 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as u32)
+        .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(0))
 }
 
 #[cfg(test)]

@@ -24,8 +24,12 @@ const IE_POST_DESTINATION_MAC_ADDRESS: u16 = 80;
 const IE_FLOW_START_MILLISECONDS: u16 = 152;
 const IE_FLOW_END_MILLISECONDS: u16 = 153;
 
+const FIELD_COUNT: u16 = 12;
+const TEMPLATE_RECORD_LEN: u16 = 4 + FIELD_COUNT * 4;
+const TEMPLATE_SET_LEN: u16 = 4 + 2 * TEMPLATE_RECORD_LEN;
+
 /// Field specifier (IE, length) tuples in record byte order.
-const V4_FIELDS: &[(u16, u16)] = &[
+const V4_FIELDS: [(u16, u16); FIELD_COUNT as usize] = [
     (IE_SOURCE_IPV4_ADDRESS, 4),
     (IE_DESTINATION_IPV4_ADDRESS, 4),
     (IE_SOURCE_TRANSPORT_PORT, 2),
@@ -40,7 +44,7 @@ const V4_FIELDS: &[(u16, u16)] = &[
     (IE_FLOW_END_MILLISECONDS, 8),
 ];
 
-const V6_FIELDS: &[(u16, u16)] = &[
+const V6_FIELDS: [(u16, u16); FIELD_COUNT as usize] = [
     (IE_SOURCE_IPV6_ADDRESS, 16),
     (IE_DESTINATION_IPV6_ADDRESS, 16),
     (IE_SOURCE_TRANSPORT_PORT, 2),
@@ -58,23 +62,19 @@ const V6_FIELDS: &[(u16, u16)] = &[
 /// Write the combined Template Set (containing both templates) to `out`.
 /// The set header carries `set_id=2` and the set length includes itself.
 pub fn write_template_set(out: &mut Vec<u8>) {
-    let start = out.len();
-    // Set header: set_id=2, length placeholder.
     out.extend_from_slice(&super::TEMPLATE_SET_ID.to_be_bytes());
-    out.extend_from_slice(&[0u8, 0u8]);
-
-    write_template_record(out, super::TEMPLATE_ID_V4, V4_FIELDS);
-    write_template_record(out, super::TEMPLATE_ID_V6, V6_FIELDS);
-
-    let set_len = out.len() - start;
-    let len_be = (set_len as u16).to_be_bytes();
-    out[start + 2] = len_be[0];
-    out[start + 3] = len_be[1];
+    out.extend_from_slice(&TEMPLATE_SET_LEN.to_be_bytes());
+    write_template_record(out, super::TEMPLATE_ID_V4, &V4_FIELDS);
+    write_template_record(out, super::TEMPLATE_ID_V6, &V6_FIELDS);
 }
 
-fn write_template_record(out: &mut Vec<u8>, template_id: u16, fields: &[(u16, u16)]) {
+fn write_template_record(
+    out: &mut Vec<u8>,
+    template_id: u16,
+    fields: &[(u16, u16); FIELD_COUNT as usize],
+) {
     out.extend_from_slice(&template_id.to_be_bytes());
-    out.extend_from_slice(&(fields.len() as u16).to_be_bytes());
+    out.extend_from_slice(&FIELD_COUNT.to_be_bytes());
     for (ie, len) in fields {
         // Standard IEs only — enterprise bit (0x8000) stays clear.
         out.extend_from_slice(&ie.to_be_bytes());
