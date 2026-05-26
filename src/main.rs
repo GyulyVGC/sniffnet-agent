@@ -71,7 +71,7 @@ fn main() {
     }
 
     for flow_map in rx {
-        let addrs = interface_addresses(&cfg.interface);
+        let addrs = interface_addresses(&cfg.interface, link_type);
         let flows: Vec<_> = flow_map
             .into_iter()
             .filter(|(key, _)| !key.is_self_export(collector_addr))

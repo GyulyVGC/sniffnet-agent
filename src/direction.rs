@@ -1,5 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use pcap::Linktype;
+
 /// IPFIX IE 61 `flowDirection` values: 0x00 = ingress, 0x01 = egress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlowDirection {
@@ -44,7 +46,7 @@ pub fn get_direction(
     })
 }
 
-pub fn interface_addresses(interface_name: &str) -> Vec<IpAddr> {
+pub fn interface_addresses(interface_name: &str, link_type: Linktype) -> Vec<IpAddr> {
     let devices = match pcap::Device::list() {
         Ok(d) => d,
         Err(e) => {
@@ -52,15 +54,25 @@ pub fn interface_addresses(interface_name: &str) -> Vec<IpAddr> {
             return Vec::new();
         }
     };
-    let Some(device) = devices.into_iter().find(|d| d.name == interface_name) else {
+    let is_sll = matches!(link_type, Linktype::LINUX_SLL | Linktype::LINUX_SLL2);
+    let mut addresses: Vec<IpAddr> = Vec::new();
+    let mut matched = false;
+    for dev in devices {
+        if is_sll {
+            addresses.extend(dev.addresses.into_iter().map(|a| a.addr));
+        } else if dev.name == interface_name {
+            addresses.extend(dev.addresses.into_iter().map(|a| a.addr));
+            matched = true;
+            break;
+        }
+    }
+    if !is_sll && !matched {
         log::warn!("interface '{interface_name}' not found in device list");
-        return Vec::new();
-    };
-    let addrs: Vec<IpAddr> = device.addresses.into_iter().map(|a| a.addr).collect();
-    if addrs.is_empty() {
+    }
+    if addresses.is_empty() {
         log::debug!("interface '{interface_name}' has no addresses");
     }
-    addrs
+    addresses
 }
 
 #[cfg(test)]
