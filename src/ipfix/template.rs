@@ -26,7 +26,7 @@ const IE_FLOW_END_MILLISECONDS: u16 = 153;
 
 const FIELD_COUNT: u16 = 12;
 const TEMPLATE_RECORD_LEN: u16 = 4 + FIELD_COUNT * 4;
-const TEMPLATE_SET_LEN: u16 = 4 + 2 * TEMPLATE_RECORD_LEN;
+pub const TEMPLATE_SET_LEN: u16 = 4 + 2 * TEMPLATE_RECORD_LEN;
 
 /// Field specifier (IE, length) tuples in record byte order.
 const V4_FIELDS: [(u16, u16); FIELD_COUNT as usize] = [

@@ -35,13 +35,7 @@ impl Exporter {
             Some(t) => t.elapsed() >= Duration::from_secs(30),
         };
         let now_unix = unix_seconds();
-        let (datagrams, new_seq) = build_datagrams(flows, self.seq, include_template_set, now_unix)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "an error occurred while building datagrams",
-                )
-            })?;
+        let (datagrams, new_seq) = build_datagrams(flows, self.seq, include_template_set, now_unix);
         if include_template_set {
             self.last_template_send = Some(Instant::now());
         }
@@ -52,7 +46,7 @@ impl Exporter {
         let mut last_err: Option<io::Error> = None;
         for dg in &datagrams {
             if let Err(e) = self.sock.send(dg) {
-                log::warn!("UDP send failed: {e}");
+                log::debug!("UDP send failed ({} bytes): {e}", dg.len());
                 last_err = Some(e);
             }
         }
@@ -72,14 +66,16 @@ fn unix_seconds() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::FlowKey;
-    use std::net::{IpAddr, Ipv4Addr};
+    use crate::flow::{FlowAddrs, FlowKey};
+    use std::net::Ipv4Addr;
 
     fn flow(a: u8) -> (FlowKey, FlowVal) {
         (
             FlowKey {
-                src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, a)),
-                dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 99)),
+                addrs: FlowAddrs::V4 {
+                    src: Ipv4Addr::new(10, 0, 0, a),
+                    dst: Ipv4Addr::new(10, 0, 0, 99),
+                },
                 src_port: Some(1000 + u16::from(a)),
                 dst_port: Some(443),
                 protocol: 6,

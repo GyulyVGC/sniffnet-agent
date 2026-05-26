@@ -1,12 +1,35 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::direction::{FlowDirection, get_direction};
 
+/// Source/destination IPs of a flow, paired by family so mixed-family
+/// [`FlowKey`]s are unrepresentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FlowAddrs {
+    V4 { src: Ipv4Addr, dst: Ipv4Addr },
+    V6 { src: Ipv6Addr, dst: Ipv6Addr },
+}
+
+impl FlowAddrs {
+    pub fn src(self) -> IpAddr {
+        match self {
+            FlowAddrs::V4 { src, .. } => IpAddr::V4(src),
+            FlowAddrs::V6 { src, .. } => IpAddr::V6(src),
+        }
+    }
+
+    pub fn dst(self) -> IpAddr {
+        match self {
+            FlowAddrs::V4 { dst, .. } => IpAddr::V4(dst),
+            FlowAddrs::V6 { dst, .. } => IpAddr::V6(dst),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FlowKey {
-    pub src_ip: IpAddr,
-    pub dst_ip: IpAddr,
+    pub addrs: FlowAddrs,
     pub src_port: Option<u16>,
     pub dst_port: Option<u16>,
     pub protocol: u8,
@@ -18,7 +41,7 @@ impl FlowKey {
     /// don't appear in the exported stream.
     pub fn is_self_export(&self, collector: SocketAddr) -> bool {
         self.protocol == 17
-            && self.dst_ip == collector.ip()
+            && self.addrs.dst() == collector.ip()
             && self.dst_port == Some(collector.port())
     }
 }
@@ -46,13 +69,9 @@ impl FlowVal {
     /// iterator: `.map(|(k, v)| (k, v.with_direction(&k, &addrs)))`. Runs on
     /// the main thread so the pcap address lookup doesn't compete with capture.
     pub fn with_direction(mut self, key: &FlowKey, my_addresses: &[IpAddr]) -> Self {
-        self.direction = get_direction(
-            &key.src_ip,
-            &key.dst_ip,
-            key.src_port,
-            key.dst_port,
-            my_addresses,
-        );
+        let src = key.addrs.src();
+        let dst = key.addrs.dst();
+        self.direction = get_direction(&src, &dst, key.src_port, key.dst_port, my_addresses);
         self
     }
 }
@@ -127,8 +146,10 @@ mod tests {
 
     fn key(a: u8, b: u8) -> FlowKey {
         FlowKey {
-            src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, a)),
-            dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, b)),
+            addrs: FlowAddrs::V4 {
+                src: Ipv4Addr::new(10, 0, 0, a),
+                dst: Ipv4Addr::new(10, 0, 0, b),
+            },
             src_port: Some(1000 + u16::from(a)),
             dst_port: Some(443),
             protocol: 6,
@@ -206,14 +227,16 @@ mod tests {
 
     #[test]
     fn is_self_export_only_matches_udp_to_collector() {
-        let collector_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let collector_v4 = Ipv4Addr::new(127, 0, 0, 1);
         let collector_port = 4739;
-        let collector = SocketAddr::new(collector_ip, collector_port);
+        let collector = SocketAddr::new(IpAddr::V4(collector_v4), collector_port);
 
         // UDP to collector — matches
         let self_export = FlowKey {
-            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
-            dst_ip: collector_ip,
+            addrs: FlowAddrs::V4 {
+                src: Ipv4Addr::new(192, 168, 1, 10),
+                dst: collector_v4,
+            },
             src_port: Some(54321),
             dst_port: Some(collector_port),
             protocol: 17,
@@ -225,7 +248,10 @@ mod tests {
         };
         // UDP to different dst — no match
         let unrelated_udp = FlowKey {
-            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            addrs: FlowAddrs::V4 {
+                src: Ipv4Addr::new(192, 168, 1, 10),
+                dst: Ipv4Addr::new(8, 8, 8, 8),
+            },
             ..self_export
         };
 
@@ -236,19 +262,24 @@ mod tests {
 
     #[test]
     fn with_direction_classifies_against_interface_addresses() {
-        let local = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10));
-        let remote = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+        let local_v4 = Ipv4Addr::new(192, 168, 1, 10);
+        let remote_v4 = Ipv4Addr::new(8, 8, 8, 8);
+        let local = IpAddr::V4(local_v4);
 
         let outgoing = FlowKey {
-            src_ip: local,
-            dst_ip: remote,
+            addrs: FlowAddrs::V4 {
+                src: local_v4,
+                dst: remote_v4,
+            },
             src_port: Some(40000),
             dst_port: Some(443),
             protocol: 6,
         };
         let incoming = FlowKey {
-            src_ip: remote,
-            dst_ip: local,
+            addrs: FlowAddrs::V4 {
+                src: remote_v4,
+                dst: local_v4,
+            },
             src_port: Some(443),
             dst_port: Some(40000),
             protocol: 6,

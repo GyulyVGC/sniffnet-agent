@@ -45,12 +45,22 @@ pub fn get_direction(
 }
 
 pub fn interface_addresses(interface_name: &str) -> Vec<IpAddr> {
-    pcap::Device::list()
-        .unwrap_or_default()
-        .into_iter()
-        .find(|d| d.name == interface_name)
-        .map(|d| d.addresses.into_iter().map(|a| a.addr).collect())
-        .unwrap_or_default()
+    let devices = match pcap::Device::list() {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("failed to list interfaces while resolving '{interface_name}': {e}");
+            return Vec::new();
+        }
+    };
+    let Some(device) = devices.into_iter().find(|d| d.name == interface_name) else {
+        log::warn!("interface '{interface_name}' not found in device list");
+        return Vec::new();
+    };
+    let addrs: Vec<IpAddr> = device.addresses.into_iter().map(|a| a.addr).collect();
+    if addrs.is_empty() {
+        log::debug!("interface '{interface_name}' has no addresses");
+    }
+    addrs
 }
 
 #[cfg(test)]

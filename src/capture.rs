@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
@@ -7,7 +7,7 @@ use etherparse::{EtherType, LaxPacketHeaders, LinkHeader, NetHeaders, TransportH
 use pcap::{Active, Capture, Linktype};
 
 use crate::cli::Config;
-use crate::flow::{FlowKey, FlowTable, FlowVal};
+use crate::flow::{FlowAddrs, FlowKey, FlowTable, FlowVal};
 
 struct Decoded {
     key: FlowKey,
@@ -164,15 +164,19 @@ fn decode_packet(data: &[u8], link_type: Linktype) -> Option<Decoded> {
         _ => (None, None),
     };
 
-    let (src_ip, dst_ip, bytes) = match headers.net? {
+    let (addrs, bytes) = match headers.net? {
         NetHeaders::Ipv4(h, _) => (
-            IpAddr::V4(Ipv4Addr::from(h.source)),
-            IpAddr::V4(Ipv4Addr::from(h.destination)),
+            FlowAddrs::V4 {
+                src: Ipv4Addr::from(h.source),
+                dst: Ipv4Addr::from(h.destination),
+            },
             u64::from(h.total_len),
         ),
         NetHeaders::Ipv6(h, _) => (
-            IpAddr::V6(Ipv6Addr::from(h.source)),
-            IpAddr::V6(Ipv6Addr::from(h.destination)),
+            FlowAddrs::V6 {
+                src: Ipv6Addr::from(h.source),
+                dst: Ipv6Addr::from(h.destination),
+            },
             u64::from(h.payload_length) + 40,
         ),
         NetHeaders::Arp(_) => return None,
@@ -187,8 +191,7 @@ fn decode_packet(data: &[u8], link_type: Linktype) -> Option<Decoded> {
 
     Some(Decoded {
         key: FlowKey {
-            src_ip,
-            dst_ip,
+            addrs,
             src_port,
             dst_port,
             protocol,

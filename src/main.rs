@@ -42,14 +42,13 @@ fn main() {
     );
 
     if let Err(e) = ctrlc::set_handler(|| std::process::exit(130)) {
-        log::error!("failed to install signal handler: {e}");
-        std::process::exit(1);
+        log::warn!("failed to install interrupt signal handler: {e}");
     }
 
     let mut exporter = match Exporter::connect(collector_addr) {
         Ok(e) => e,
         Err(e) => {
-            log::error!("failed to bind UDP socket: {e}");
+            log::error!("failed to connect exporter to {collector_addr}: {e}");
             std::process::exit(1);
         }
     };

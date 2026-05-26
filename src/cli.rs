@@ -60,8 +60,8 @@ fn require_tty(arg: &str) {
 
 fn read_line() -> String {
     let mut buf = String::new();
-    if std::io::stdin().lock().read_line(&mut buf).is_err() {
-        eprintln!("failed to read input");
+    if let Err(e) = std::io::stdin().lock().read_line(&mut buf) {
+        eprintln!("failed to read input: {e}");
         std::process::exit(1);
     }
     buf.trim().to_string()

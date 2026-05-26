@@ -1,7 +1,7 @@
 //! RFC 7011 IPFIX message encoder.
 //!
 //! Builds one or more IPFIX-over-UDP datagrams from a batch of flow flows,
-//! splitting across datagrams to stay under `mtu`. Each datagram has the form
+//! splitting across datagrams to stay under `MTU`. Each datagram has the form
 //!
 //! ```text
 //! [Message Header (16B)]
@@ -13,13 +13,18 @@
 //! Sequence number semantics follow RFC 7011 §3.1 (cumulative count of Data
 //! Records sent on the stream, modulo 2^32).
 
-use std::net::IpAddr;
-
-use crate::flow::{FlowKey, FlowVal};
-use crate::ipfix::template::write_template_set;
+use crate::flow::{FlowAddrs, FlowKey, FlowVal};
+use crate::ipfix::template::{TEMPLATE_SET_LEN, write_template_set};
 use crate::ipfix::{
-    RECORD_SIZE_V4, RECORD_SIZE_V6, SET_HEADER_LEN, TEMPLATE_ID_V4, TEMPLATE_ID_V6, VERSION,
+    MSG_HEADER_LEN, RECORD_SIZE_V4, RECORD_SIZE_V6, SET_HEADER_LEN, TEMPLATE_ID_V4, TEMPLATE_ID_V6,
+    VERSION,
 };
+
+const MTU: u16 = 1400;
+
+// MTU must hold the header, a template set, a set header, and at least one
+// v6 record — otherwise the encode loop could spin without making progress.
+const _: () = assert!(MTU >= MSG_HEADER_LEN + TEMPLATE_SET_LEN + SET_HEADER_LEN + RECORD_SIZE_V6);
 
 /// Encode `flows` into one or more UDP-ready datagrams.
 ///
@@ -30,15 +35,13 @@ pub fn build_datagrams(
     seq_start: u32,
     mut include_template_set: bool,
     now_unix: u32,
-) -> Option<(Vec<Vec<u8>>, u32)> {
-    let mtu: usize = 1400;
-
+) -> (Vec<Vec<u8>>, u32) {
     let mut v4: Vec<&(FlowKey, FlowVal)> = Vec::new();
     let mut v6: Vec<&(FlowKey, FlowVal)> = Vec::new();
     for flow in flows {
-        match flow.0.src_ip {
-            IpAddr::V4(_) => v4.push(flow),
-            IpAddr::V6(_) => v6.push(flow),
+        match flow.0.addrs {
+            FlowAddrs::V4 { .. } => v4.push(flow),
+            FlowAddrs::V6 { .. } => v6.push(flow),
         }
     }
 
@@ -48,7 +51,8 @@ pub fn build_datagrams(
     let mut v6_idx = 0usize;
 
     while v4_idx < v4.len() || v6_idx < v6.len() {
-        let mut buf = Vec::with_capacity(mtu);
+        let mut buf = Vec::with_capacity(usize::from(MTU));
+        let mut msg_len: u16 = MSG_HEADER_LEN;
 
         // Message header placeholder; backfilled with length/seq below.
         buf.extend_from_slice(&VERSION.to_be_bytes());
@@ -59,97 +63,89 @@ pub fn build_datagrams(
 
         if include_template_set {
             write_template_set(&mut buf);
+            msg_len += TEMPLATE_SET_LEN;
             include_template_set = false;
         }
 
-        let mut records_in_msg = 0u32;
-
-        if v4_idx < v4.len() {
-            let remaining_budget = mtu.saturating_sub(buf.len()).saturating_sub(SET_HEADER_LEN);
-            let fit = remaining_budget / RECORD_SIZE_V4;
-            let take = fit.min(v4.len() - v4_idx);
-            if take > 0 {
-                write_data_set(&mut buf, TEMPLATE_ID_V4, take * RECORD_SIZE_V4, |out| {
-                    for flow in &v4[v4_idx..v4_idx + take] {
-                        write_v4_record(out, &flow.0, &flow.1)?;
-                    }
-                    Some(())
-                })?;
-                v4_idx += take;
-                records_in_msg += u32::try_from(take).ok()?;
-            }
-        }
-
-        if v6_idx < v6.len() {
-            let remaining_budget = mtu.saturating_sub(buf.len()).saturating_sub(SET_HEADER_LEN);
-            let fit = remaining_budget / RECORD_SIZE_V6;
-            let take = fit.min(v6.len() - v6_idx);
-            if take > 0 {
-                write_data_set(&mut buf, TEMPLATE_ID_V6, take * RECORD_SIZE_V6, |out| {
-                    for flow in &v6[v6_idx..v6_idx + take] {
-                        write_v6_record(out, &flow.0, &flow.1)?;
-                    }
-                    Some(())
-                })?;
-                v6_idx += take;
-                records_in_msg += u32::try_from(take).ok()?;
-            }
-        }
-
-        // Defensive: if nothing was packed we'd loop forever on the same indices.
-        // Bail out with None so the caller surfaces it instead of hanging.
-        if records_in_msg == 0 {
-            return None;
-        }
+        let mut records_in_msg: u16 = 0;
+        records_in_msg += pack_set(
+            &mut buf,
+            &v4,
+            &mut v4_idx,
+            TEMPLATE_ID_V4,
+            RECORD_SIZE_V4,
+            &mut msg_len,
+        );
+        records_in_msg += pack_set(
+            &mut buf,
+            &v6,
+            &mut v6_idx,
+            TEMPLATE_ID_V6,
+            RECORD_SIZE_V6,
+            &mut msg_len,
+        );
 
         // Back-patch message length (offsets 2..4).
-        let len_be = u16::try_from(buf.len()).ok()?.to_be_bytes();
+        let len_be = msg_len.to_be_bytes();
         buf[2] = len_be[0];
         buf[3] = len_be[1];
 
-        seq = seq.wrapping_add(records_in_msg);
+        seq = seq.wrapping_add(u32::from(records_in_msg));
         datagrams.push(buf);
     }
 
-    Some((datagrams, seq))
+    (datagrams, seq)
 }
 
-fn write_data_set(
-    out: &mut Vec<u8>,
-    set_id: u16,
-    payload_len: usize,
-    write_payload: impl FnOnce(&mut Vec<u8>) -> Option<()>,
-) -> Option<()> {
-    let set_len = SET_HEADER_LEN + payload_len;
+/// Pack as many records as fit into one set; returns how many were written.
+fn pack_set(
+    buf: &mut Vec<u8>,
+    flows: &[&(FlowKey, FlowVal)],
+    idx: &mut usize,
+    template_id: u16,
+    record_size: u16,
+    msg_len: &mut u16,
+) -> u16 {
+    let take = take_records(flows.len() - *idx, *msg_len, record_size);
+    if take == 0 {
+        return 0;
+    }
+    let payload_len = take * record_size;
+    write_set_header(buf, template_id, payload_len);
+    for flow in &flows[*idx..*idx + usize::from(take)] {
+        write_record(buf, &flow.0, &flow.1);
+    }
+    *idx += usize::from(take);
+    *msg_len += SET_HEADER_LEN + payload_len;
+    take
+}
+
+/// How many `record_size`-byte records fit alongside one set header in the
+/// remaining MTU budget, capped at the number still owed.
+fn take_records(remaining: usize, msg_len: u16, record_size: u16) -> u16 {
+    let budget = MTU.saturating_sub(msg_len).saturating_sub(SET_HEADER_LEN);
+    let fit = budget / record_size;
+    let remaining_capped = u16::try_from(remaining).unwrap_or(u16::MAX);
+    fit.min(remaining_capped)
+}
+
+fn write_set_header(out: &mut Vec<u8>, set_id: u16, payload_len: u16) {
     out.extend_from_slice(&set_id.to_be_bytes());
-    out.extend_from_slice(&u16::try_from(set_len).ok()?.to_be_bytes());
-    write_payload(out)
+    out.extend_from_slice(&(SET_HEADER_LEN + payload_len).to_be_bytes());
 }
 
-fn write_v4_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) -> Option<()> {
-    let IpAddr::V4(src) = key.src_ip else {
-        return None;
-    };
-    let IpAddr::V4(dst) = key.dst_ip else {
-        return None;
-    };
-    out.extend_from_slice(&src.octets());
-    out.extend_from_slice(&dst.octets());
+fn write_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
+    match key.addrs {
+        FlowAddrs::V4 { src, dst } => {
+            out.extend_from_slice(&src.octets());
+            out.extend_from_slice(&dst.octets());
+        }
+        FlowAddrs::V6 { src, dst } => {
+            out.extend_from_slice(&src.octets());
+            out.extend_from_slice(&dst.octets());
+        }
+    }
     write_common_tail(out, key, val);
-    Some(())
-}
-
-fn write_v6_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) -> Option<()> {
-    let IpAddr::V6(src) = key.src_ip else {
-        return None;
-    };
-    let IpAddr::V6(dst) = key.dst_ip else {
-        return None;
-    };
-    out.extend_from_slice(&src.octets());
-    out.extend_from_slice(&dst.octets());
-    write_common_tail(out, key, val);
-    Some(())
 }
 
 fn write_common_tail(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
@@ -177,8 +173,10 @@ mod tests {
     fn v4_flow(a: u8, b: u8, bytes: u64, packets: u64) -> (FlowKey, FlowVal) {
         (
             FlowKey {
-                src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, a)),
-                dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, b)),
+                addrs: FlowAddrs::V4 {
+                    src: Ipv4Addr::new(10, 0, 0, a),
+                    dst: Ipv4Addr::new(10, 0, 0, b),
+                },
                 src_port: Some(1000 + u16::from(a)),
                 dst_port: Some(443),
                 protocol: 6,
@@ -198,8 +196,10 @@ mod tests {
     fn v6_flow(bytes: u64, packets: u64) -> (FlowKey, FlowVal) {
         (
             FlowKey {
-                src_ip: IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
-                dst_ip: IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)),
+                addrs: FlowAddrs::V6 {
+                    src: Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+                    dst: Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2),
+                },
                 src_port: Some(5555),
                 dst_port: Some(80),
                 protocol: 17,
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn empty_flows_produces_no_datagrams() {
-        let (out, seq) = build_datagrams(&[], 0, false, 12345).unwrap();
+        let (out, seq) = build_datagrams(&[], 0, false, 12345);
         assert!(out.is_empty());
         assert_eq!(seq, 0);
     }
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn header_layout_is_exact() {
         let s = [v4_flow(1, 2, 100, 5)];
-        let (out, _) = build_datagrams(&s, 0x1122_3344, false, 0xDEADBEEF).unwrap();
+        let (out, _) = build_datagrams(&s, 0x1122_3344, false, 0xDEADBEEF);
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         assert_eq!(dg[0..2], 0x000Au16.to_be_bytes(), "version");
@@ -242,7 +242,7 @@ mod tests {
         let flows: Vec<_> = (0..50)
             .map(|i| v4_flow(i as u8, (i + 1) as u8, 100, 1))
             .collect();
-        let (out, _) = build_datagrams(&flows, 0, true, 0).unwrap();
+        let (out, _) = build_datagrams(&flows, 0, true, 0);
         assert!(out.len() >= 2);
         // first datagram should contain template set id (2) right after header
         let first_set_id = u16::from_be_bytes([out[0][16], out[0][17]]);
@@ -255,8 +255,10 @@ mod tests {
     #[test]
     fn v4_record_byte_layout() {
         let key = FlowKey {
-            src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            dst_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+            addrs: FlowAddrs::V4 {
+                src: Ipv4Addr::new(10, 0, 0, 1),
+                dst: Ipv4Addr::new(192, 168, 1, 5),
+            },
             src_port: Some(0xAABB),
             dst_port: Some(0x01BB),
             protocol: 6,
@@ -270,10 +272,10 @@ mod tests {
             first_seen_ms: 0x1111_2222_3333_4444,
             last_seen_ms: 0x5555_6666_7777_8888,
         };
-        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0).unwrap();
+        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0);
         let dg = &out[0];
         // Skip 16B header + 4B data set header = 20B prefix.
-        let rec = &dg[20..20 + RECORD_SIZE_V4];
+        let rec = &dg[20..20 + usize::from(RECORD_SIZE_V4)];
         assert_eq!(rec[0..4], [10, 0, 0, 1]);
         assert_eq!(rec[4..8], [192, 168, 1, 5]);
         assert_eq!(rec[8..10], [0xAA, 0xBB]);
@@ -294,8 +296,10 @@ mod tests {
     #[test]
     fn direction_byte_encodes_all_three_states() {
         let key = FlowKey {
-            src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+            addrs: FlowAddrs::V4 {
+                src: Ipv4Addr::new(10, 0, 0, 1),
+                dst: Ipv4Addr::new(10, 0, 0, 2),
+            },
             src_port: Some(1234),
             dst_port: Some(80),
             protocol: 6,
@@ -315,7 +319,7 @@ mod tests {
             (None, 0xFF),
         ];
         for (dir, expected) in cases {
-            let (out, _) = build_datagrams(&[(key, make(dir))], 0, false, 0).unwrap();
+            let (out, _) = build_datagrams(&[(key, make(dir))], 0, false, 0);
             // Byte offset for flowDirection: header(16) + set hdr(4) + 4+4+2+2+1+6+6 = 45.
             assert_eq!(out[0][45], expected, "dir {:?}", dir);
         }
@@ -324,7 +328,7 @@ mod tests {
     #[test]
     fn sequence_number_advances_by_record_count() {
         let flows = vec![v4_flow(1, 2, 100, 1), v4_flow(3, 4, 200, 1)];
-        let (_, seq) = build_datagrams(&flows, 100, false, 0).unwrap();
+        let (_, seq) = build_datagrams(&flows, 100, false, 0);
         assert_eq!(seq, 102);
     }
 
@@ -335,7 +339,7 @@ mod tests {
         let flows: Vec<_> = (0..67)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
-        let (out, seq) = build_datagrams(&flows, 0, false, 0).unwrap();
+        let (out, seq) = build_datagrams(&flows, 0, false, 0);
         assert_eq!(out.len(), 3);
         assert_eq!(
             u32::from_be_bytes([out[0][8], out[0][9], out[0][10], out[0][11]]),
@@ -355,7 +359,7 @@ mod tests {
     #[test]
     fn sequence_number_wraps_modulo_2_32() {
         let flows = vec![v4_flow(1, 2, 100, 1), v4_flow(3, 4, 100, 1)];
-        let (_, seq) = build_datagrams(&flows, u32::MAX - 1, false, 0).unwrap();
+        let (_, seq) = build_datagrams(&flows, u32::MAX - 1, false, 0);
         assert_eq!(seq, 0);
     }
 
@@ -364,17 +368,17 @@ mod tests {
         let flows: Vec<_> = (0..200)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
-        let (out, seq) = build_datagrams(&flows, 0, false, 0).unwrap();
+        let (out, seq) = build_datagrams(&flows, 0, false, 0);
         assert_eq!(seq, 200);
         // Sum the records reported in each datagram's message length.
         let mut total_records = 0u32;
         for dg in &out {
             assert!(dg.len() <= 1400);
-            let msg_len = u16::from_be_bytes([dg[2], dg[3]]) as usize;
+            let msg_len = u16::from_be_bytes([dg[2], dg[3]]);
             // After 16B msg hdr + 4B set hdr, what remains is records.
             let data_bytes = msg_len - 20;
             assert_eq!(data_bytes % RECORD_SIZE_V4, 0);
-            total_records += (data_bytes / RECORD_SIZE_V4) as u32;
+            total_records += u32::from(data_bytes / RECORD_SIZE_V4);
         }
         assert_eq!(total_records, 200);
     }
@@ -382,17 +386,17 @@ mod tests {
     #[test]
     fn v4_and_v6_share_a_datagram_when_room_allows() {
         let flows = vec![v4_flow(1, 2, 100, 1), v6_flow(200, 2)];
-        let (out, _) = build_datagrams(&flows, 0, false, 0).unwrap();
+        let (out, _) = build_datagrams(&flows, 0, false, 0);
         assert_eq!(out.len(), 1);
         let dg = &out[0];
-        // After 16B header: v4 data set (4 + 41 = 45B) then v6 data set (4 + 65 = 69B)
+        // After 16B header: v4 data set (4 + 58 = 62B) then v6 data set (4 + 82 = 86B)
         let first_set_id = u16::from_be_bytes([dg[16], dg[17]]);
-        let first_set_len = u16::from_be_bytes([dg[18], dg[19]]) as usize;
+        let first_set_len = u16::from_be_bytes([dg[18], dg[19]]);
         assert_eq!(first_set_id, TEMPLATE_ID_V4);
         assert_eq!(first_set_len, SET_HEADER_LEN + RECORD_SIZE_V4);
-        let off = 16 + first_set_len;
+        let off = 16 + usize::from(first_set_len);
         let second_set_id = u16::from_be_bytes([dg[off], dg[off + 1]]);
-        let second_set_len = u16::from_be_bytes([dg[off + 2], dg[off + 3]]) as usize;
+        let second_set_len = u16::from_be_bytes([dg[off + 2], dg[off + 3]]);
         assert_eq!(second_set_id, TEMPLATE_ID_V6);
         assert_eq!(second_set_len, SET_HEADER_LEN + RECORD_SIZE_V6);
     }
@@ -400,8 +404,8 @@ mod tests {
     #[test]
     fn include_template_set_flag_drives_first_datagram_layout() {
         let flows = [v4_flow(1, 2, 100, 1)];
-        let (with, _) = build_datagrams(&flows, 0, true, 0).unwrap();
-        let (without, _) = build_datagrams(&flows, 0, false, 0).unwrap();
+        let (with, _) = build_datagrams(&flows, 0, true, 0);
+        let (without, _) = build_datagrams(&flows, 0, false, 0);
         // With template, the first set is the template set (id=2)
         let with_id = u16::from_be_bytes([with[0][16], with[0][17]]);
         let without_id = u16::from_be_bytes([without[0][16], without[0][17]]);
