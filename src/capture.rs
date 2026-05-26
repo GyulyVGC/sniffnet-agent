@@ -19,19 +19,27 @@ struct Decoded {
 pub fn open(cfg: &Config) -> Result<(Capture<Active>, Linktype), pcap::Error> {
     let cap = open_capture(cfg)?;
     let link_type = cap.get_datalink();
+    let lt_label = link_type_label(link_type);
     if !link_type_is_supported(link_type) {
         log::warn!(
-            "interface '{}' has link type {:?} which is not specifically handled; \
+            "interface '{}' has link type {lt_label} which is not specifically handled; \
              falling back to Ethernet decode",
             cfg.interface,
-            link_type
         );
     }
     log::info!(
-        "capture started: interface={}, link_type={link_type:?}",
+        "capture started: interface={}, link_type={lt_label}",
         cfg.interface
     );
     Ok((cap, link_type))
+}
+
+fn link_type_label(lt: Linktype) -> String {
+    let name = lt.get_name().unwrap_or_else(|_| lt.0.to_string());
+    match lt.get_description() {
+        Ok(desc) => format!("{name} ({desc})"),
+        Err(_) => name,
+    }
 }
 
 pub fn run(mut cap: Capture<Active>, link_type: Linktype, tx: &Sender<HashMap<FlowKey, FlowVal>>) {
