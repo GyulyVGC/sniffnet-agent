@@ -14,11 +14,10 @@ categories = ["visualization", "gui", "network-programming"]
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
-ctrlc = { version = "3.5.2", features = ["termination"] }
 etherparse = "0.20.1"
 pcap = "2.4.0"
 log = "0.4.30"
-jiff = "0.2.25"
+jiff = "0.2.27"
 
 [profile.release]
 lto = true
