@@ -1,4 +1,4 @@
-// TODO: thoroughly check manifest, README, docs, clippy
+// TODO: thoroughly check manifest, README, docs
 
 // TODO: exporter identity!!! interfaceDescription maybe
 

@@ -1,16 +1,16 @@
 [package]
 name = "sniffnet-agent"
-version = "0.0.0"
+version = "0.1.0"
 authors = ["Giuliano Bellini <gyulyvgc99@gmail.com>"]
 edition = "2024"
 description = "Lightweight network flows exporter compatible with Sniffnet"
 readme = "README.md"
-homepage = "https://sniffnet.net"
-repository = "https://github.com/GyulyVGC/sniffnet-agent"
+homepage = "https://sniffnet.app"
+repository = "https://github.com/sniffnet/sniffnet-agent"
 documentation = "https://github.com/GyulyVGC/sniffnet/wiki"
 license = "MIT OR Apache-2.0"
-keywords = ["filter", "network", "packet", "sniffer", "gui"]
-categories = ["visualization", "gui", "network-programming"]
+keywords = ["network", "ipfix", "sniffer", "cli"]
+categories = ["network-programming", "command-line-utilities"]
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
@@ -20,6 +20,10 @@ log = "0.4.30"
 jiff = "0.2.27"
 
 [profile.release]
+opt-level = 3
 lto = true
-codegen-units = 1
 strip = true
+codegen-units = 1
+
+[badges]
+maintenance = { status = "actively-developed" }
