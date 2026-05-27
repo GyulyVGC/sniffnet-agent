@@ -1,5 +1,3 @@
-// TODO: thoroughly check manifest, README, docs
-
 // TODO: exporter identity!!! interfaceDescription maybe
 
 // TODO: ICMP message types
