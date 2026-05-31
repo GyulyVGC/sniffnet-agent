@@ -11,6 +11,7 @@ documentation = "https://github.com/GyulyVGC/sniffnet/wiki"
 license = "MIT OR Apache-2.0"
 keywords = ["network", "ipfix", "sniffer", "cli"]
 categories = ["network-programming", "command-line-utilities"]
+include = ["src/**/*", "LICENSE-*", "README.md", "CHANGELOG.md"]
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
