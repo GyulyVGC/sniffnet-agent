@@ -26,13 +26,7 @@ fn main() {
     let cfg = Args::parse().resolve();
     logger::init_logger(cfg.verbose);
 
-    let collector_addr = match cfg.collector_addr() {
-        Ok(addr) => addr,
-        Err(e) => {
-            log::error!("{e}");
-            std::process::exit(2);
-        }
-    };
+    let collector_addr = cfg.collector;
 
     log::info!(
         "starting sniffnet-agent: interface='{}', collector='{collector_addr}'",

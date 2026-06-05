@@ -10,22 +10,22 @@ use std::net::{SocketAddr, ToSocketAddrs};
 pub struct Args {
     /// Network interface to capture on (e.g. "en0", "eth0").
     #[arg(short, long)]
-    pub interface: Option<String>,
+    interface: Option<String>,
     /// Collector address as HOST:PORT.
-    #[arg(short, long, value_name = "HOST:PORT")]
-    pub collector: Option<String>,
+    #[arg(short, long, value_name = "HOST:PORT", value_parser = parse_collector)]
+    collector: Option<SocketAddr>,
     /// BPF filter expression applied to the capture.
     #[arg(short, long)]
-    pub filter: Option<String>,
+    filter: Option<String>,
     /// Enable debug logging.
     #[arg(short, long)]
-    pub verbose: bool,
+    verbose: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub interface: String,
-    pub collector: String,
+    pub collector: SocketAddr,
     pub filter: Option<String>,
     pub verbose: bool,
 }
@@ -41,14 +41,11 @@ impl Args {
     }
 }
 
-impl Config {
-    pub fn collector_addr(&self) -> Result<SocketAddr, String> {
-        self.collector
-            .to_socket_addrs()
-            .map_err(|e| format!("cannot resolve collector address '{}': {e}", self.collector))?
-            .next()
-            .ok_or_else(|| format!("no address resolved for '{}'", self.collector))
-    }
+fn parse_collector(s: &str) -> Result<SocketAddr, String> {
+    s.to_socket_addrs()
+        .map_err(|e| format!("cannot resolve collector address '{s}': {e}"))?
+        .next()
+        .ok_or_else(|| format!("no address resolved for '{s}'"))
 }
 
 fn require_tty(arg: &str) {
@@ -97,19 +94,13 @@ fn prompt_interface() -> String {
     }
 }
 
-fn prompt_collector() -> String {
+fn prompt_collector() -> SocketAddr {
     require_tty("collector");
     loop {
         eprint!("Collector address (HOST:PORT): ");
-        let input = read_line();
-        match input.to_socket_addrs() {
-            Ok(mut addrs) => {
-                if addrs.next().is_some() {
-                    return input;
-                }
-                eprintln!("no address resolved for '{input}'");
-            }
-            Err(e) => eprintln!("invalid address '{input}': {e}"),
+        match parse_collector(&read_line()) {
+            Ok(addr) => return addr,
+            Err(e) => eprintln!("{e}"),
         }
     }
 }
