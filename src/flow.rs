@@ -12,14 +12,14 @@ pub enum FlowAddrs {
 }
 
 impl FlowAddrs {
-    pub fn src(self) -> IpAddr {
+    fn src(self) -> IpAddr {
         match self {
             FlowAddrs::V4 { src, .. } => IpAddr::V4(src),
             FlowAddrs::V6 { src, .. } => IpAddr::V6(src),
         }
     }
 
-    pub fn dst(self) -> IpAddr {
+    fn dst(self) -> IpAddr {
         match self {
             FlowAddrs::V4 { dst, .. } => IpAddr::V4(dst),
             FlowAddrs::V6 { dst, .. } => IpAddr::V6(dst),
@@ -65,9 +65,7 @@ pub struct FlowVal {
 
 impl FlowVal {
     /// Compute and attach direction for this flow given its `key` and the
-    /// current interface address snapshot. Builder-shaped so it slots into an
-    /// iterator: `.map(|(k, v)| (k, v.with_direction(&k, &addrs)))`. Runs on
-    /// the main thread so the pcap address lookup doesn't compete with capture.
+    /// current interface address snapshot.
     pub fn with_direction(mut self, key: &FlowKey, my_addresses: &[IpAddr]) -> Self {
         let src = key.addrs.src();
         let dst = key.addrs.dst();
@@ -132,11 +130,6 @@ impl FlowTable {
     pub fn drain(&mut self) -> HashMap<FlowKey, FlowVal> {
         std::mem::take(&mut self.inner)
     }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
 }
 
 #[cfg(test)]
@@ -182,7 +175,7 @@ mod tests {
 
         let first = table.drain();
         assert_eq!(first.len(), 1);
-        assert_eq!(table.len(), 0, "drain must clear the table");
+        assert_eq!(table.inner.len(), 0, "drain must clear the table");
 
         let second = table.drain();
         assert!(second.is_empty());
@@ -254,10 +247,16 @@ mod tests {
             },
             ..self_export
         };
+        // UDP to different port — no match
+        let udp_to_other_port = FlowKey {
+            dst_port: Some(9999),
+            ..self_export
+        };
 
         assert!(self_export.is_self_export(collector));
         assert!(!tcp_to_collector_port.is_self_export(collector));
         assert!(!unrelated_udp.is_self_export(collector));
+        assert!(!udp_to_other_port.is_self_export(collector));
     }
 
     #[test]
@@ -293,7 +292,7 @@ mod tests {
             first_seen_ms: 0,
             last_seen_ms: 0,
         };
-        let by_key: std::collections::HashMap<_, _> = [(outgoing, val), (incoming, val)]
+        let by_key: HashMap<_, _> = [(outgoing, val), (incoming, val)]
             .into_iter()
             .map(|(k, v)| (k, v.with_direction(&k, &[local]).direction))
             .collect();
