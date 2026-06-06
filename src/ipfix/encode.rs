@@ -20,7 +20,7 @@ use crate::ipfix::{
     VERSION,
 };
 
-const MTU: u16 = 1400;
+const MTU: u16 = 1200;
 
 // MTU must hold the header, a template set, a set header, and at least one
 // v6 record — otherwise the encode loop could spin without making progress.
@@ -334,24 +334,28 @@ mod tests {
 
     #[test]
     fn sequence_number_carries_across_messages() {
-        // At mtu=1400 a no-template datagram fits floor((1400 - 16 - 4) / 58) = 23 v4
-        // records. 67 records therefore splits into 23 + 23 + 21 across three datagrams.
+        // At mtu=1200 a no-template datagram fits floor((1200 - 16 - 4) / 58) = 20 v4
+        // records. 67 records therefore splits into 20 + 20 + 20 + 7 across four datagrams.
         let flows: Vec<_> = (0..67)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
         let (out, seq) = build_datagrams(&flows, 0, false, 0);
-        assert_eq!(out.len(), 3);
+        assert_eq!(out.len(), 4);
         assert_eq!(
             u32::from_be_bytes([out[0][8], out[0][9], out[0][10], out[0][11]]),
             0
         );
         assert_eq!(
             u32::from_be_bytes([out[1][8], out[1][9], out[1][10], out[1][11]]),
-            23
+            20
         );
         assert_eq!(
             u32::from_be_bytes([out[2][8], out[2][9], out[2][10], out[2][11]]),
-            46
+            40
+        );
+        assert_eq!(
+            u32::from_be_bytes([out[3][8], out[3][9], out[3][10], out[3][11]]),
+            60
         );
         assert_eq!(seq, 67);
     }
@@ -373,7 +377,7 @@ mod tests {
         // Sum the records reported in each datagram's message length.
         let mut total_records = 0u32;
         for dg in &out {
-            assert!(dg.len() <= 1400);
+            assert!(dg.len() <= 1200);
             let msg_len = u16::from_be_bytes([dg[2], dg[3]]);
             // After 16B msg hdr + 4B set hdr, what remains is records.
             let data_bytes = msg_len - 20;
