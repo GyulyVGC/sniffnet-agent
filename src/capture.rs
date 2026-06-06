@@ -23,12 +23,12 @@ pub fn open(cfg: &Config) -> Result<(Capture<Active>, Linktype), pcap::Error> {
     if !link_type_is_supported(link_type) {
         log::warn!(
             "unsupported link type '{lt_label}' on '{}'; decoding as Ethernet",
-            cfg.interface,
+            cfg.interface.name,
         );
     }
     log::info!(
         "capture started: interface='{}', link_type='{lt_label}'",
-        cfg.interface
+        cfg.interface.name
     );
     Ok((cap, link_type))
 }
@@ -85,7 +85,7 @@ fn link_type_is_supported(lt: Linktype) -> bool {
 }
 
 fn open_capture(cfg: &Config) -> Result<Capture<Active>, pcap::Error> {
-    let mut cap = Capture::from_device(cfg.interface.as_str())?
+    let mut cap = Capture::from_device(cfg.interface.clone())?
         .promisc(false)
         .buffer_size(2_000_000)
         .snaplen(200)

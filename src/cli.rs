@@ -1,4 +1,5 @@
 use clap::Parser;
+use pcap::Device;
 use std::io::{BufRead, IsTerminal};
 use std::net::{SocketAddr, ToSocketAddrs};
 
@@ -9,8 +10,8 @@ use std::net::{SocketAddr, ToSocketAddrs};
 )]
 pub struct Args {
     /// Network interface to capture on (e.g. "en0", "eth0").
-    #[arg(short, long)]
-    interface: Option<String>,
+    #[arg(short, long, value_parser = parse_interface)]
+    interface: Option<Device>,
     /// Collector address as HOST:PORT.
     #[arg(short, long, value_name = "HOST:PORT", value_parser = parse_collector)]
     collector: Option<SocketAddr>,
@@ -24,7 +25,7 @@ pub struct Args {
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub interface: String,
+    pub interface: Device,
     pub collector: SocketAddr,
     pub filter: Option<String>,
     pub verbose: bool,
@@ -39,6 +40,14 @@ impl Args {
             verbose: self.verbose,
         }
     }
+}
+
+fn parse_interface(name: &str) -> Result<Device, String> {
+    Device::list()
+        .map_err(|e| format!("failed to list interfaces: {e}"))?
+        .into_iter()
+        .find(|d| d.name == name)
+        .ok_or_else(|| format!("interface '{name}' not found"))
 }
 
 fn parse_collector(s: &str) -> Result<SocketAddr, String> {
@@ -64,9 +73,9 @@ fn read_line() -> String {
     buf.trim().to_string()
 }
 
-fn prompt_interface() -> String {
+fn prompt_interface() -> Device {
     require_tty("interface");
-    let devices = match pcap::Device::list() {
+    let devices = match Device::list() {
         Ok(d) => d,
         Err(e) => {
             eprintln!("failed to list interfaces: {e}");
@@ -85,7 +94,7 @@ fn prompt_interface() -> String {
     loop {
         eprint!("Choose one (1-{}): ", devices.len());
         match read_line().parse::<usize>() {
-            Ok(n) if (1..=devices.len()).contains(&n) => return devices[n - 1].name.clone(),
+            Ok(n) if (1..=devices.len()).contains(&n) => return devices[n - 1].clone(),
             _ => eprintln!(
                 "invalid choice; enter a number between 1 and {}",
                 devices.len()

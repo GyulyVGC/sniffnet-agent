@@ -31,7 +31,7 @@ fn main() {
 
     log::info!(
         "starting sniffnet-agent: interface='{}', collector='{collector_addr}'",
-        cfg.interface
+        cfg.interface.name
     );
 
     let mut exporter = match Exporter::connect(collector_addr) {
@@ -45,7 +45,7 @@ fn main() {
     let (cap, link_type) = match capture::open(&cfg) {
         Ok(x) => x,
         Err(e) => {
-            log::error!("failed to open capture on '{}': {e}", cfg.interface);
+            log::error!("failed to open capture on '{}': {e}", cfg.interface.name);
             std::process::exit(1);
         }
     };
@@ -60,7 +60,7 @@ fn main() {
     }
 
     for flow_map in rx {
-        let addrs = interface_addresses(&cfg.interface, link_type);
+        let addrs = interface_addresses(&cfg.interface.name, link_type);
         let flows: Vec<_> = flow_map
             .into_iter()
             .filter(|(key, _)| !key.is_self_export(collector_addr))
