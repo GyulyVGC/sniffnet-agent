@@ -294,6 +294,43 @@ mod tests {
     }
 
     #[test]
+    fn v6_record_byte_layout() {
+        let src = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let dst = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2);
+        let key = FlowKey {
+            addrs: FlowAddrs::V6 { src, dst },
+            src_port: Some(0xAABB),
+            dst_port: Some(0x01BB),
+            protocol: 17,
+        };
+        let val = FlowVal {
+            bytes: 0x0102_0304_0506_0708,
+            packets: 0x00FF,
+            src_mac: Some([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
+            dst_mac: Some([0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]),
+            direction: Some(crate::direction::FlowDirection::Incoming),
+            first_seen_ms: 0x1111_2222_3333_4444,
+            last_seen_ms: 0x5555_6666_7777_8888,
+        };
+        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0);
+        let dg = &out[0];
+        // Skip 16B header + 4B data set header = 20B prefix.
+        let rec = &dg[20..20 + usize::from(RECORD_SIZE_V6)];
+        assert_eq!(rec[0..16], src.octets());
+        assert_eq!(rec[16..32], dst.octets());
+        assert_eq!(rec[32..34], [0xAA, 0xBB]);
+        assert_eq!(rec[34..36], [0x01, 0xBB]);
+        assert_eq!(rec[36], 17);
+        assert_eq!(rec[37..43], [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+        assert_eq!(rec[43..49], [0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]);
+        assert_eq!(rec[49], 0x00, "flowDirection ingress");
+        assert_eq!(rec[50..58], 0x0102_0304_0506_0708u64.to_be_bytes());
+        assert_eq!(rec[58..66], 0x00FFu64.to_be_bytes());
+        assert_eq!(rec[66..74], 0x1111_2222_3333_4444u64.to_be_bytes());
+        assert_eq!(rec[74..82], 0x5555_6666_7777_8888u64.to_be_bytes());
+    }
+
+    #[test]
     fn direction_byte_encodes_all_three_states() {
         let key = FlowKey {
             addrs: FlowAddrs::V4 {
@@ -383,6 +420,24 @@ mod tests {
             let data_bytes = msg_len - 20;
             assert_eq!(data_bytes % RECORD_SIZE_V4, 0);
             total_records += u32::from(data_bytes / RECORD_SIZE_V4);
+        }
+        assert_eq!(total_records, 200);
+    }
+
+    #[test]
+    fn mtu_split_v6_count_matches_input() {
+        let flows: Vec<_> = (0..200).map(|_| v6_flow(200, 1)).collect();
+        let (out, seq) = build_datagrams(&flows, 0, false, 0);
+        assert_eq!(seq, 200);
+        // Sum the records reported in each datagram's message length.
+        let mut total_records = 0u32;
+        for dg in &out {
+            assert!(dg.len() <= 1400);
+            let msg_len = u16::from_be_bytes([dg[2], dg[3]]);
+            // After 16B msg hdr + 4B set hdr, what remains is records.
+            let data_bytes = msg_len - 20;
+            assert_eq!(data_bytes % RECORD_SIZE_V6, 0);
+            total_records += u32::from(data_bytes / RECORD_SIZE_V6);
         }
         assert_eq!(total_records, 200);
     }
