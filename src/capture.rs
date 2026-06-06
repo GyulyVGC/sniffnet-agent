@@ -85,9 +85,6 @@ fn link_type_is_supported(lt: Linktype) -> bool {
 }
 
 fn open_capture(cfg: &Config) -> Result<Capture<Active>, pcap::Error> {
-    // pcap setup mirrors Sniffnet's live capture (capture_context.rs): buffered
-    // mode + a 2 MB ring buffer trades sub-millisecond latency for throughput,
-    // which is what we want for a 900 ms aggregation window.
     let mut cap = Capture::from_device(cfg.interface.as_str())?
         .promisc(false)
         .buffer_size(2_000_000)
@@ -167,12 +164,12 @@ fn from_linux_sll(packet: &[u8], is_v1: bool) -> Option<LaxPacketHeaders<'_>> {
 fn decode_packet(data: &[u8], link_type: Linktype) -> Option<Decoded> {
     let headers = get_sniffable_headers(data, link_type)?;
 
-    let (src_mac, dst_mac) = match headers.link {
-        Some(LinkHeader::Ethernet2(eth)) => (Some(eth.source), Some(eth.destination)),
-        _ => (None, None),
+    let (src_mac, dst_mac, link_bytes) = match headers.link {
+        Some(LinkHeader::Ethernet2(eth)) => (Some(eth.source), Some(eth.destination), 14),
+        _ => (None, None, 0),
     };
 
-    let (addrs, bytes) = match headers.net? {
+    let (addrs, net_bytes) = match headers.net? {
         NetHeaders::Ipv4(h, _) => (
             FlowAddrs::V4 {
                 src: Ipv4Addr::from(h.source),
@@ -204,7 +201,7 @@ fn decode_packet(data: &[u8], link_type: Linktype) -> Option<Decoded> {
             dst_port,
             protocol,
         },
-        bytes,
+        bytes: link_bytes + net_bytes,
         src_mac,
         dst_mac,
     })

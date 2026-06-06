@@ -4,6 +4,7 @@
 // TODO: VLAN tags
 // TODO: dropped packets
 // TODO: ARP support
+// TODO: adjust Linux SLL parsing once etherparse supports Linux SLL2
 
 mod capture;
 mod cli;
