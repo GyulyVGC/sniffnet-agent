@@ -9,7 +9,6 @@
 
 // IANA IPFIX Information Element IDs we use. Kept here so the only place that
 // "knows" the wire layout is the template definition.
-const IE_OCTET_DELTA_COUNT: u16 = 1;
 const IE_PACKET_DELTA_COUNT: u16 = 2;
 const IE_PROTOCOL_IDENTIFIER: u16 = 4;
 const IE_SOURCE_TRANSPORT_PORT: u16 = 7;
@@ -20,9 +19,10 @@ const IE_SOURCE_IPV6_ADDRESS: u16 = 27;
 const IE_DESTINATION_IPV6_ADDRESS: u16 = 28;
 const IE_SOURCE_MAC_ADDRESS: u16 = 56;
 const IE_FLOW_DIRECTION: u16 = 61;
-const IE_POST_DESTINATION_MAC_ADDRESS: u16 = 80;
+const IE_DESTINATION_MAC_ADDRESS: u16 = 80;
 const IE_FLOW_START_MILLISECONDS: u16 = 152;
 const IE_FLOW_END_MILLISECONDS: u16 = 153;
+const IE_LAYER2_OCTET_DELTA_COUNT: u16 = 352;
 
 const FIELD_COUNT: u16 = 12;
 const TEMPLATE_RECORD_LEN: u16 = 4 + FIELD_COUNT * 4;
@@ -36,9 +36,9 @@ const V4_FIELDS: [(u16, u16); FIELD_COUNT as usize] = [
     (IE_DESTINATION_TRANSPORT_PORT, 2),
     (IE_PROTOCOL_IDENTIFIER, 1),
     (IE_SOURCE_MAC_ADDRESS, 6),
-    (IE_POST_DESTINATION_MAC_ADDRESS, 6),
+    (IE_DESTINATION_MAC_ADDRESS, 6),
     (IE_FLOW_DIRECTION, 1),
-    (IE_OCTET_DELTA_COUNT, 8),
+    (IE_LAYER2_OCTET_DELTA_COUNT, 8),
     (IE_PACKET_DELTA_COUNT, 8),
     (IE_FLOW_START_MILLISECONDS, 8),
     (IE_FLOW_END_MILLISECONDS, 8),
@@ -51,9 +51,9 @@ const V6_FIELDS: [(u16, u16); FIELD_COUNT as usize] = [
     (IE_DESTINATION_TRANSPORT_PORT, 2),
     (IE_PROTOCOL_IDENTIFIER, 1),
     (IE_SOURCE_MAC_ADDRESS, 6),
-    (IE_POST_DESTINATION_MAC_ADDRESS, 6),
+    (IE_DESTINATION_MAC_ADDRESS, 6),
     (IE_FLOW_DIRECTION, 1),
-    (IE_OCTET_DELTA_COUNT, 8),
+    (IE_LAYER2_OCTET_DELTA_COUNT, 8),
     (IE_PACKET_DELTA_COUNT, 8),
     (IE_FLOW_START_MILLISECONDS, 8),
     (IE_FLOW_END_MILLISECONDS, 8),
@@ -101,9 +101,9 @@ mod tests {
         0x00, 0x0b, 0x00, 0x02, // IE 11 (dstPort), 2B
         0x00, 0x04, 0x00, 0x01, // IE 4 (protocol), 1B
         0x00, 0x38, 0x00, 0x06, // IE 56 (srcMac), 6B
-        0x00, 0x50, 0x00, 0x06, // IE 80 (postDstMac), 6B
+        0x00, 0x50, 0x00, 0x06, // IE 80 (DstMac), 6B
         0x00, 0x3d, 0x00, 0x01, // IE 61 (flowDirection), 1B
-        0x00, 0x01, 0x00, 0x08, // IE 1 (octetDeltaCount), 8B
+        0x01, 0x60, 0x00, 0x08, // IE 352 (layer2OctetDeltaCount), 8B
         0x00, 0x02, 0x00, 0x08, // IE 2 (packetDeltaCount), 8B
         0x00, 0x98, 0x00, 0x08, // IE 152 (flowStartMilliseconds), 8B
         0x00, 0x99, 0x00, 0x08, // IE 153 (flowEndMilliseconds), 8B
@@ -112,16 +112,16 @@ mod tests {
         // Template 257 fields
         0x00, 0x1b, 0x00, 0x10, // IE 27 (srcIPv6), 16B
         0x00, 0x1c, 0x00, 0x10, // IE 28 (dstIPv6), 16B
-        0x00, 0x07, 0x00, 0x02,
-        0x00, 0x0b, 0x00, 0x02,
-        0x00, 0x04, 0x00, 0x01,
-        0x00, 0x38, 0x00, 0x06,
-        0x00, 0x50, 0x00, 0x06,
-        0x00, 0x3d, 0x00, 0x01,
-        0x00, 0x01, 0x00, 0x08,
-        0x00, 0x02, 0x00, 0x08,
-        0x00, 0x98, 0x00, 0x08,
-        0x00, 0x99, 0x00, 0x08,
+        0x00, 0x07, 0x00, 0x02, // IE 7 (srcPort), 2B
+        0x00, 0x0b, 0x00, 0x02, // IE 11 (dstPort), 2B
+        0x00, 0x04, 0x00, 0x01, // IE 4 (protocol), 1B
+        0x00, 0x38, 0x00, 0x06, // IE 56 (srcMac), 6B
+        0x00, 0x50, 0x00, 0x06, // IE 80 (DstMac), 6B
+        0x00, 0x3d, 0x00, 0x01, // IE 61 (flowDirection), 1B
+        0x01, 0x60, 0x00, 0x08, // IE 352 (layer2OctetDeltaCount), 8B
+        0x00, 0x02, 0x00, 0x08, // IE 2 (packetDeltaCount), 8B
+        0x00, 0x98, 0x00, 0x08, // IE 152 (flowStartMilliseconds), 8B
+        0x00, 0x99, 0x00, 0x08, // IE 153 (flowEndMilliseconds), 8B
     ];
 
     #[test]

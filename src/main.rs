@@ -5,6 +5,7 @@
 // TODO: dropped packets
 // TODO: ARP support
 // TODO: adjust Linux SLL parsing once etherparse supports Linux SLL2
+// TODO: observation domain ID
 
 mod capture;
 mod cli;
