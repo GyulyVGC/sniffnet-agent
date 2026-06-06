@@ -416,6 +416,11 @@ mod tests {
         for dg in &out {
             assert!(dg.len() <= 1200);
             let msg_len = u16::from_be_bytes([dg[2], dg[3]]);
+            assert_eq!(
+                usize::from(msg_len),
+                dg.len(),
+                "length field matches datagram size"
+            );
             // After 16B msg hdr + 4B set hdr, what remains is records.
             let data_bytes = msg_len - 20;
             assert_eq!(data_bytes % RECORD_SIZE_V4, 0);
@@ -432,8 +437,13 @@ mod tests {
         // Sum the records reported in each datagram's message length.
         let mut total_records = 0u32;
         for dg in &out {
-            assert!(dg.len() <= 1400);
+            assert!(dg.len() <= 1200);
             let msg_len = u16::from_be_bytes([dg[2], dg[3]]);
+            assert_eq!(
+                usize::from(msg_len),
+                dg.len(),
+                "length field matches datagram size"
+            );
             // After 16B msg hdr + 4B set hdr, what remains is records.
             let data_bytes = msg_len - 20;
             assert_eq!(data_bytes % RECORD_SIZE_V6, 0);
