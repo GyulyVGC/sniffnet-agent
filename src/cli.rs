@@ -57,6 +57,7 @@ fn parse_collector(s: &str) -> Result<SocketAddr, String> {
         .ok_or_else(|| format!("no address resolved for '{s}'"))
 }
 
+#[allow(clippy::print_stderr)]
 fn require_tty(arg: &str) {
     if !std::io::stdin().is_terminal() {
         eprintln!("missing --{arg}");
@@ -64,6 +65,7 @@ fn require_tty(arg: &str) {
     }
 }
 
+#[allow(clippy::print_stderr)]
 fn read_line() -> String {
     let mut buf = String::new();
     if let Err(e) = std::io::stdin().lock().read_line(&mut buf) {
@@ -73,6 +75,7 @@ fn read_line() -> String {
     buf.trim().to_string()
 }
 
+#[allow(clippy::print_stderr)]
 fn prompt_interface() -> Device {
     require_tty("interface");
     let devices = match Device::list() {
@@ -103,6 +106,7 @@ fn prompt_interface() -> Device {
     }
 }
 
+#[allow(clippy::print_stderr)]
 fn prompt_collector() -> SocketAddr {
     require_tty("collector");
     loop {

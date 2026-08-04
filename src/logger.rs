@@ -11,6 +11,7 @@ impl Log for Logger {
         metadata.level() <= log::max_level()
     }
 
+    #[allow(clippy::print_stderr)]
     fn log(&self, record: &Record) {
         if !self.enabled(record.metadata()) {
             return;
