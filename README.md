@@ -46,9 +46,10 @@ Run with no arguments to be prompted interactively for the interface and collect
 
 ### Options
 
-| Flag                | Description                                           |
-|---------------------|-------------------------------------------------------|
-| `-i`, `--interface` | Network interface to capture on (e.g. `en0`, `eth0`). |
-| `-c`, `--collector` | Collector address as `HOST:PORT`.                     |
-| `-f`, `--filter`    | BPF filter expression applied to the capture.         |
-| `-v`, `--verbose`   | Enable debug logging.                                 |
+| Flag                | Description                                   |
+|---------------------|-----------------------------------------------|
+| `-i`, `--interface` | Network interface to capture on (e.g. `eth0`) |
+| `-c`, `--collector` | Collector address as `HOST:PORT`              |
+| `-f`, `--filter`    | BPF filter expression applied to the capture  |
+| `-o`, `--odid`      | IPFIX Observation Domain ID [default: 0]      |
+| `-v`, `--verbose`   | Enable debug logging                          |

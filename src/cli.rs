@@ -9,19 +9,19 @@ use std::net::{SocketAddr, ToSocketAddrs};
     about = "Lightweight network flows exporter compatible with Sniffnet"
 )]
 pub struct Args {
-    /// Network interface to capture on (e.g. "en0", "eth0").
+    /// Network interface to capture on (e.g. "eth0")
     #[arg(short, long, value_parser = parse_interface)]
     interface: Option<Device>,
-    /// Collector address as HOST:PORT.
+    /// Collector address as HOST:PORT
     #[arg(short, long, value_name = "HOST:PORT", value_parser = parse_collector)]
     collector: Option<SocketAddr>,
-    /// BPF filter expression applied to the capture.
+    /// BPF filter expression applied to the capture
     #[arg(short, long)]
     filter: Option<String>,
-    /// Observation domain ID declared in the exported IPFIX messages.
+    /// IPFIX Observation Domain ID
     #[arg(short, long, value_name = "ODID", default_value_t = 0)]
     odid: u32,
-    /// Enable debug logging.
+    /// Enable debug logging
     #[arg(short, long)]
     verbose: bool,
 }
