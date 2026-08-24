@@ -8,11 +8,12 @@ use crate::ipfix::encode::build_datagrams;
 pub struct Exporter {
     sock: UdpSocket,
     seq: u32,
+    odid: u32,
     last_template_send: Option<Instant>,
 }
 
 impl Exporter {
-    pub fn connect(addr: SocketAddr) -> io::Result<Self> {
+    pub fn connect(addr: SocketAddr, odid: u32) -> io::Result<Self> {
         let bind_addr: SocketAddr = match addr {
             SocketAddr::V4(_) => SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
             SocketAddr::V6(_) => SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
@@ -22,6 +23,7 @@ impl Exporter {
         Ok(Self {
             sock,
             seq: 0,
+            odid,
             last_template_send: None,
         })
     }
@@ -35,7 +37,8 @@ impl Exporter {
             Some(t) => t.elapsed() >= Duration::from_secs(30),
         };
         let now_unix = unix_seconds();
-        let (datagrams, new_seq) = build_datagrams(flows, self.seq, include_template_set, now_unix);
+        let (datagrams, new_seq) =
+            build_datagrams(flows, self.seq, include_template_set, now_unix, self.odid);
         if include_template_set {
             self.last_template_send = Some(Instant::now());
         }
@@ -100,7 +103,7 @@ mod tests {
         recv.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
         let recv_addr = recv.local_addr().unwrap();
 
-        let mut exp = Exporter::connect(recv_addr).unwrap();
+        let mut exp = Exporter::connect(recv_addr, 0).unwrap();
         exp.flush(&vec![flow(1)]).unwrap();
 
         let mut buf = [0u8; 2048];
@@ -123,7 +126,7 @@ mod tests {
         let recv = UdpSocket::bind("127.0.0.1:0").unwrap();
         recv.set_read_timeout(Some(Duration::from_millis(50)))
             .unwrap();
-        let mut exp = Exporter::connect(recv.local_addr().unwrap()).unwrap();
+        let mut exp = Exporter::connect(recv.local_addr().unwrap(), 0).unwrap();
         exp.flush(&vec![]).unwrap();
         let mut buf = [0u8; 64];
         assert!(recv.recv_from(&mut buf).is_err(), "no datagram expected");

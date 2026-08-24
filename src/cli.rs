@@ -18,6 +18,9 @@ pub struct Args {
     /// BPF filter expression applied to the capture.
     #[arg(short, long)]
     filter: Option<String>,
+    /// Observation domain ID declared in the exported IPFIX messages.
+    #[arg(short, long, value_name = "ODID", default_value_t = 0)]
+    odid: u32,
     /// Enable debug logging.
     #[arg(short, long)]
     verbose: bool,
@@ -28,6 +31,7 @@ pub struct Config {
     pub interface: Device,
     pub collector: SocketAddr,
     pub filter: Option<String>,
+    pub odid: u32,
     pub verbose: bool,
 }
 
@@ -37,6 +41,7 @@ impl Args {
             interface: self.interface.unwrap_or_else(prompt_interface),
             collector: self.collector.unwrap_or_else(prompt_collector),
             filter: self.filter,
+            odid: self.odid,
             verbose: self.verbose,
         }
     }

@@ -35,6 +35,7 @@ pub fn build_datagrams(
     seq_start: u32,
     mut include_template_set: bool,
     now_unix: u32,
+    odid: u32,
 ) -> (Vec<Vec<u8>>, u32) {
     let mut v4: Vec<&(FlowKey, FlowVal)> = Vec::new();
     let mut v6: Vec<&(FlowKey, FlowVal)> = Vec::new();
@@ -59,7 +60,7 @@ pub fn build_datagrams(
         buf.extend_from_slice(&[0u8, 0u8]); // length placeholder
         buf.extend_from_slice(&now_unix.to_be_bytes());
         buf.extend_from_slice(&seq.to_be_bytes());
-        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&odid.to_be_bytes());
 
         if include_template_set {
             write_template_set(&mut buf);
@@ -218,7 +219,7 @@ mod tests {
 
     #[test]
     fn empty_flows_produces_no_datagrams() {
-        let (out, seq) = build_datagrams(&[], 0, false, 12345);
+        let (out, seq) = build_datagrams(&[], 0, false, 12345, 0);
         assert!(out.is_empty());
         assert_eq!(seq, 0);
     }
@@ -226,7 +227,7 @@ mod tests {
     #[test]
     fn header_layout_is_exact() {
         let s = [v4_flow(1, 2, 100, 5)];
-        let (out, _) = build_datagrams(&s, 0x1122_3344, false, 0xDEADBEEF);
+        let (out, _) = build_datagrams(&s, 0x1122_3344, false, 0xDEADBEEF, 0);
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         assert_eq!(dg[0..2], 0x000Au16.to_be_bytes(), "version");
@@ -238,11 +239,24 @@ mod tests {
     }
 
     #[test]
+    fn odid_is_written_in_every_datagram_header() {
+        // enough flows to spill over more than one datagram
+        let flows: Vec<_> = (0..50)
+            .map(|i| v4_flow(i as u8, (i + 1) as u8, 100, 1))
+            .collect();
+        let (out, _) = build_datagrams(&flows, 0, true, 0, 0x0102_0304);
+        assert!(out.len() >= 2);
+        for dg in &out {
+            assert_eq!(dg[12..16], 0x0102_0304u32.to_be_bytes(), "odid");
+        }
+    }
+
+    #[test]
     fn template_set_only_in_first_datagram() {
         let flows: Vec<_> = (0..50)
             .map(|i| v4_flow(i as u8, (i + 1) as u8, 100, 1))
             .collect();
-        let (out, _) = build_datagrams(&flows, 0, true, 0);
+        let (out, _) = build_datagrams(&flows, 0, true, 0, 0);
         assert!(out.len() >= 2);
         // first datagram should contain template set id (2) right after header
         let first_set_id = u16::from_be_bytes([out[0][16], out[0][17]]);
@@ -272,7 +286,7 @@ mod tests {
             first_seen_ms: 0x1111_2222_3333_4444,
             last_seen_ms: 0x5555_6666_7777_8888,
         };
-        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0);
+        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0, 0);
         let dg = &out[0];
         // Skip 16B header + 4B data set header = 20B prefix.
         let rec = &dg[20..20 + usize::from(RECORD_SIZE_V4)];
@@ -312,7 +326,7 @@ mod tests {
             first_seen_ms: 0x1111_2222_3333_4444,
             last_seen_ms: 0x5555_6666_7777_8888,
         };
-        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0);
+        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0, 0);
         let dg = &out[0];
         // Skip 16B header + 4B data set header = 20B prefix.
         let rec = &dg[20..20 + usize::from(RECORD_SIZE_V6)];
@@ -356,7 +370,7 @@ mod tests {
             (None, 0xFF),
         ];
         for (dir, expected) in cases {
-            let (out, _) = build_datagrams(&[(key, make(dir))], 0, false, 0);
+            let (out, _) = build_datagrams(&[(key, make(dir))], 0, false, 0, 0);
             // Byte offset for flowDirection: header(16) + set hdr(4) + 4+4+2+2+1+6+6 = 45.
             assert_eq!(out[0][45], expected, "dir {:?}", dir);
         }
@@ -365,7 +379,7 @@ mod tests {
     #[test]
     fn sequence_number_advances_by_record_count() {
         let flows = vec![v4_flow(1, 2, 100, 1), v4_flow(3, 4, 200, 1)];
-        let (_, seq) = build_datagrams(&flows, 100, false, 0);
+        let (_, seq) = build_datagrams(&flows, 100, false, 0, 0);
         assert_eq!(seq, 102);
     }
 
@@ -376,7 +390,7 @@ mod tests {
         let flows: Vec<_> = (0..67)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
-        let (out, seq) = build_datagrams(&flows, 0, false, 0);
+        let (out, seq) = build_datagrams(&flows, 0, false, 0, 0);
         assert_eq!(out.len(), 4);
         assert_eq!(
             u32::from_be_bytes([out[0][8], out[0][9], out[0][10], out[0][11]]),
@@ -400,7 +414,7 @@ mod tests {
     #[test]
     fn sequence_number_wraps_modulo_2_32() {
         let flows = vec![v4_flow(1, 2, 100, 1), v4_flow(3, 4, 100, 1)];
-        let (_, seq) = build_datagrams(&flows, u32::MAX - 1, false, 0);
+        let (_, seq) = build_datagrams(&flows, u32::MAX - 1, false, 0, 0);
         assert_eq!(seq, 0);
     }
 
@@ -409,7 +423,7 @@ mod tests {
         let flows: Vec<_> = (0..200)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
-        let (out, seq) = build_datagrams(&flows, 0, false, 0);
+        let (out, seq) = build_datagrams(&flows, 0, false, 0, 0);
         assert_eq!(seq, 200);
         // Sum the records reported in each datagram's message length.
         let mut total_records = 0u32;
@@ -432,7 +446,7 @@ mod tests {
     #[test]
     fn mtu_split_v6_count_matches_input() {
         let flows: Vec<_> = (0..200).map(|_| v6_flow(200, 1)).collect();
-        let (out, seq) = build_datagrams(&flows, 0, false, 0);
+        let (out, seq) = build_datagrams(&flows, 0, false, 0, 0);
         assert_eq!(seq, 200);
         // Sum the records reported in each datagram's message length.
         let mut total_records = 0u32;
@@ -455,7 +469,7 @@ mod tests {
     #[test]
     fn v4_and_v6_share_a_datagram_when_room_allows() {
         let flows = vec![v4_flow(1, 2, 100, 1), v6_flow(200, 2)];
-        let (out, _) = build_datagrams(&flows, 0, false, 0);
+        let (out, _) = build_datagrams(&flows, 0, false, 0, 0);
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         // After 16B header: v4 data set (4 + 58 = 62B) then v6 data set (4 + 82 = 86B)
@@ -473,8 +487,8 @@ mod tests {
     #[test]
     fn include_template_set_flag_drives_first_datagram_layout() {
         let flows = [v4_flow(1, 2, 100, 1)];
-        let (with, _) = build_datagrams(&flows, 0, true, 0);
-        let (without, _) = build_datagrams(&flows, 0, false, 0);
+        let (with, _) = build_datagrams(&flows, 0, true, 0, 0);
+        let (without, _) = build_datagrams(&flows, 0, false, 0, 0);
         // With template, the first set is the template set (id=2)
         let with_id = u16::from_be_bytes([with[0][16], with[0][17]]);
         let without_id = u16::from_be_bytes([without[0][16], without[0][17]]);

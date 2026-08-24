@@ -1,11 +1,9 @@
-// TODO: exporter identity!!! interfaceDescription maybe
-
 // TODO: ICMP message types
 // TODO: VLAN tags
+// TODO: IGMP support
 // TODO: dropped packets
 // TODO: ARP support
 // TODO: adjust Linux SLL parsing once etherparse supports Linux SLL2
-// TODO: observation domain ID
 
 mod capture;
 mod cli;
@@ -29,13 +27,13 @@ fn main() {
     logger::init_logger(cfg.verbose);
 
     let collector_addr = cfg.collector;
+    let interface_name = &cfg.interface.name;
 
     log::info!(
-        "starting sniffnet-agent: interface='{}', collector='{collector_addr}'",
-        cfg.interface.name
+        "starting sniffnet-agent: interface='{interface_name}', collector='{collector_addr}'"
     );
 
-    let mut exporter = match Exporter::connect(collector_addr) {
+    let mut exporter = match Exporter::connect(collector_addr, cfg.odid) {
         Ok(e) => e,
         Err(e) => {
             log::error!("failed to connect exporter to '{collector_addr}': {e}");
@@ -46,7 +44,7 @@ fn main() {
     let (cap, link_type) = match capture::open(&cfg) {
         Ok(x) => x,
         Err(e) => {
-            log::error!("failed to open capture on '{}': {e}", cfg.interface.name);
+            log::error!("failed to open capture on '{interface_name}': {e}");
             std::process::exit(1);
         }
     };
@@ -61,7 +59,7 @@ fn main() {
     }
 
     for flow_map in rx {
-        let addrs = interface_addresses(&cfg.interface.name, link_type);
+        let addrs = interface_addresses(interface_name, link_type);
         let flows: Vec<_> = flow_map
             .into_iter()
             .filter(|(key, _)| !key.is_self_export(collector_addr))
