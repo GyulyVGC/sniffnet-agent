@@ -40,7 +40,7 @@ impl FlowKey {
     /// collector's address+port). Filtered out on the main thread so they
     /// don't appear in the exported stream.
     pub fn is_self_export(&self, collector: SocketAddr) -> bool {
-        Some(self.protocol) == Protocol::Udp.number()
+        Protocol::from_number(self.protocol) == Some(Protocol::Udp)
             && self.addrs.dst() == collector.ip()
             && self.dst_port == Some(collector.port())
     }
