@@ -1,7 +1,7 @@
+use crate::direction::{FlowDirection, get_direction};
+use sniffnet_packet_parser::Protocol;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-
-use crate::direction::{FlowDirection, get_direction};
 
 /// Source/destination IPs of a flow, paired by family so mixed-family
 /// [`FlowKey`]s are unrepresentable.
@@ -40,7 +40,7 @@ impl FlowKey {
     /// collector's address+port). Filtered out on the main thread so they
     /// don't appear in the exported stream.
     pub fn is_self_export(&self, collector: SocketAddr) -> bool {
-        self.protocol == 17
+        Some(self.protocol) == Protocol::Udp.number()
             && self.addrs.dst() == collector.ip()
             && self.dst_port == Some(collector.port())
     }
