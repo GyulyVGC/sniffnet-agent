@@ -1,6 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use pcap::Linktype;
+use sniffnet_packet_parser::LinkType;
 
 /// IPFIX IE 61 `flowDirection` values: 0x00 = ingress, 0x01 = egress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +46,7 @@ pub fn get_direction(
     })
 }
 
-pub fn interface_addresses(interface_name: &str, link_type: Linktype) -> Vec<IpAddr> {
+pub fn interface_addresses(interface_name: &str, link_type: LinkType) -> Vec<IpAddr> {
     let devices = match pcap::Device::list() {
         Ok(d) => d,
         Err(e) => {
@@ -54,7 +54,7 @@ pub fn interface_addresses(interface_name: &str, link_type: Linktype) -> Vec<IpA
             return Vec::new();
         }
     };
-    let is_sll = matches!(link_type, Linktype::LINUX_SLL | Linktype::LINUX_SLL2);
+    let is_sll = matches!(link_type, LinkType::LinuxSll(_) | LinkType::LinuxSll2(_));
     let mut addresses: Vec<IpAddr> = Vec::new();
     let mut matched = false;
     for dev in devices {
