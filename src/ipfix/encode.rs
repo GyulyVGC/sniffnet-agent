@@ -6,8 +6,8 @@
 //! ```text
 //! [Message Header (16B)]
 //! [Template Set (108B)]?      <-- only in the first datagram when refresh due
-//! [Data Set v4 (4B + N*58)]?  <-- present only if there are v4 records
-//! [Data Set v6 (4B + N*82)]?  <-- present only if there are v6 records
+//! [Data Set v4 (4B + N*60)]?  <-- present only if there are v4 records
+//! [Data Set v6 (4B + N*84)]?  <-- present only if there are v6 records
 //! ```
 //!
 //! Sequence number semantics follow RFC 7011 §3.1 (cumulative count of Data
@@ -155,6 +155,7 @@ fn write_common_tail(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
     out.push(key.protocol);
     out.extend_from_slice(&val.src_mac.unwrap_or([0; 6]));
     out.extend_from_slice(&val.dst_mac.unwrap_or([0; 6]));
+    out.extend_from_slice(&val.vlan_id.unwrap_or(0).to_be_bytes());
     out.push(match val.direction {
         Some(crate::direction::FlowDirection::Incoming) => 0x00,
         Some(crate::direction::FlowDirection::Outgoing) => 0x01,
@@ -187,6 +188,7 @@ mod tests {
                 packets,
                 src_mac: Some([0xaa; 6]),
                 dst_mac: Some([0xbb; 6]),
+                vlan_id: Some(42),
                 direction: None,
                 first_seen_ms: 0,
                 last_seen_ms: 0,
@@ -210,6 +212,7 @@ mod tests {
                 packets,
                 src_mac: None,
                 dst_mac: None,
+                vlan_id: None,
                 direction: None,
                 first_seen_ms: 0,
                 last_seen_ms: 0,
@@ -231,8 +234,8 @@ mod tests {
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         assert_eq!(dg[0..2], 0x000Au16.to_be_bytes(), "version");
-        // length back-patched: header(16) + data set header(4) + 1 v4 record(58) = 78
-        assert_eq!(u16::from_be_bytes([dg[2], dg[3]]), 78);
+        // length back-patched: header(16) + data set header(4) + 1 v4 record(60) = 80
+        assert_eq!(u16::from_be_bytes([dg[2], dg[3]]), 80);
         assert_eq!(dg[4..8], 0xDEADBEEFu32.to_be_bytes(), "export_time");
         assert_eq!(dg[8..12], 0x1122_3344u32.to_be_bytes(), "sequence");
         assert_eq!(dg[12..16], 0u32.to_be_bytes(), "odid");
@@ -282,6 +285,7 @@ mod tests {
             packets: 0x00FF,
             src_mac: Some([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
             dst_mac: Some([0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]),
+            vlan_id: Some(42),
             direction: Some(crate::direction::FlowDirection::Outgoing),
             first_seen_ms: 0x1111_2222_3333_4444,
             last_seen_ms: 0x5555_6666_7777_8888,
@@ -297,14 +301,15 @@ mod tests {
         assert_eq!(rec[12], 6);
         assert_eq!(rec[13..19], [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         assert_eq!(rec[19..25], [0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]);
-        assert_eq!(rec[25], 0x01, "flowDirection egress");
+        assert_eq!(rec[25..27], 42u16.to_be_bytes(), "dot1qVlanId");
+        assert_eq!(rec[27], 0x01, "flowDirection egress");
         assert_eq!(
-            rec[26..34],
+            rec[28..36],
             [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
         );
-        assert_eq!(rec[34..42], 0x00FFu64.to_be_bytes());
-        assert_eq!(rec[42..50], 0x1111_2222_3333_4444u64.to_be_bytes());
-        assert_eq!(rec[50..58], 0x5555_6666_7777_8888u64.to_be_bytes());
+        assert_eq!(rec[36..44], 0x00FFu64.to_be_bytes());
+        assert_eq!(rec[44..52], 0x1111_2222_3333_4444u64.to_be_bytes());
+        assert_eq!(rec[52..60], 0x5555_6666_7777_8888u64.to_be_bytes());
     }
 
     #[test]
@@ -322,6 +327,7 @@ mod tests {
             packets: 0x00FF,
             src_mac: Some([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
             dst_mac: Some([0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]),
+            vlan_id: None,
             direction: Some(crate::direction::FlowDirection::Incoming),
             first_seen_ms: 0x1111_2222_3333_4444,
             last_seen_ms: 0x5555_6666_7777_8888,
@@ -337,11 +343,12 @@ mod tests {
         assert_eq!(rec[36], 17);
         assert_eq!(rec[37..43], [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         assert_eq!(rec[43..49], [0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]);
-        assert_eq!(rec[49], 0x00, "flowDirection ingress");
-        assert_eq!(rec[50..58], 0x0102_0304_0506_0708u64.to_be_bytes());
-        assert_eq!(rec[58..66], 0x00FFu64.to_be_bytes());
-        assert_eq!(rec[66..74], 0x1111_2222_3333_4444u64.to_be_bytes());
-        assert_eq!(rec[74..82], 0x5555_6666_7777_8888u64.to_be_bytes());
+        assert_eq!(rec[49..51], [0x00, 0x00], "dot1qVlanId");
+        assert_eq!(rec[51], 0x00, "flowDirection ingress");
+        assert_eq!(rec[52..60], 0x0102_0304_0506_0708u64.to_be_bytes());
+        assert_eq!(rec[60..68], 0x00FFu64.to_be_bytes());
+        assert_eq!(rec[68..76], 0x1111_2222_3333_4444u64.to_be_bytes());
+        assert_eq!(rec[76..84], 0x5555_6666_7777_8888u64.to_be_bytes());
     }
 
     #[test]
@@ -360,6 +367,7 @@ mod tests {
             packets: 1,
             src_mac: None,
             dst_mac: None,
+            vlan_id: None,
             direction: dir,
             first_seen_ms: 0,
             last_seen_ms: 0,
@@ -371,8 +379,8 @@ mod tests {
         ];
         for (dir, expected) in cases {
             let (out, _) = build_datagrams(&[(key, make(dir))], 0, false, 0, 0);
-            // Byte offset for flowDirection: header(16) + set hdr(4) + 4+4+2+2+1+6+6 = 45.
-            assert_eq!(out[0][45], expected, "dir {:?}", dir);
+            // Byte offset for flowDirection: header(16) + set hdr(4) + 4+4+2+2+1+6+6+2 = 47.
+            assert_eq!(out[0][47], expected, "dir {:?}", dir);
         }
     }
 
@@ -385,8 +393,8 @@ mod tests {
 
     #[test]
     fn sequence_number_carries_across_messages() {
-        // At mtu=1200 a no-template datagram fits floor((1200 - 16 - 4) / 58) = 20 v4
-        // records. 67 records therefore splits into 20 + 20 + 20 + 7 across four datagrams.
+        // At mtu=1200 a no-template datagram fits floor((1200 - 16 - 4) / 60) = 19 v4
+        // records. 67 records therefore splits into 19 + 19 + 19 + 10 across four datagrams.
         let flows: Vec<_> = (0..67)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
             .collect();
@@ -398,15 +406,15 @@ mod tests {
         );
         assert_eq!(
             u32::from_be_bytes([out[1][8], out[1][9], out[1][10], out[1][11]]),
-            20
+            19
         );
         assert_eq!(
             u32::from_be_bytes([out[2][8], out[2][9], out[2][10], out[2][11]]),
-            40
+            38
         );
         assert_eq!(
             u32::from_be_bytes([out[3][8], out[3][9], out[3][10], out[3][11]]),
-            60
+            57
         );
         assert_eq!(seq, 67);
     }
@@ -472,7 +480,7 @@ mod tests {
         let (out, _) = build_datagrams(&flows, 0, false, 0, 0);
         assert_eq!(out.len(), 1);
         let dg = &out[0];
-        // After 16B header: v4 data set (4 + 58 = 62B) then v6 data set (4 + 82 = 86B)
+        // After 16B header: v4 data set (4 + 60 = 64B) then v6 data set (4 + 84 = 88B)
         let first_set_id = u16::from_be_bytes([dg[16], dg[17]]);
         let first_set_len = u16::from_be_bytes([dg[18], dg[19]]);
         assert_eq!(first_set_id, TEMPLATE_ID_V4);
