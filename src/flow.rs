@@ -100,22 +100,34 @@ impl FlowTable {
         self.inner
             .entry(key)
             .and_modify(|val| {
-                val.bytes = val.bytes.saturating_add(bytes);
-                val.packets = val.packets.saturating_add(1);
-                if val.src_mac.is_none() {
-                    val.src_mac = src_mac;
+                let FlowVal {
+                    bytes: tot_bytes,
+                    packets: tot_packets,
+                    src_mac: known_src_mac,
+                    dst_mac: known_dst_mac,
+                    vlan_id: known_vlan_id,
+                    first_seen_ms,
+                    last_seen_ms,
+                    // only filled in after drain, by `with_direction`
+                    direction: _,
+                } = val;
+
+                *tot_bytes = tot_bytes.saturating_add(bytes);
+                *tot_packets = tot_packets.saturating_add(1);
+                if known_src_mac.is_none() {
+                    *known_src_mac = src_mac;
                 }
-                if val.dst_mac.is_none() {
-                    val.dst_mac = dst_mac;
+                if known_dst_mac.is_none() {
+                    *known_dst_mac = dst_mac;
                 }
-                if val.vlan_id.is_none() {
-                    val.vlan_id = vlan_id;
+                if known_vlan_id.is_none() {
+                    *known_vlan_id = vlan_id;
                 }
-                if ts_ms < val.first_seen_ms {
-                    val.first_seen_ms = ts_ms;
+                if ts_ms < *first_seen_ms {
+                    *first_seen_ms = ts_ms;
                 }
-                if ts_ms > val.last_seen_ms {
-                    val.last_seen_ms = ts_ms;
+                if ts_ms > *last_seen_ms {
+                    *last_seen_ms = ts_ms;
                 }
             })
             .or_insert(FlowVal {
