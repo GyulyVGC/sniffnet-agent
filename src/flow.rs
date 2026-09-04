@@ -48,7 +48,9 @@ impl FlowKey {
 
 /// Value of a flow. `src_mac` / `dst_mac` are `None` when the link type
 /// carries no MACs or when no MAC has been observed yet for this flow; the
-/// encoder writes all-zero on the wire in that case. `direction` is `None`
+/// encoder writes all-zero on the wire in that case. `vlan_id` is the
+/// outermost 802.1Q tag, `None` when the flow is untagged; the encoder then
+/// writes 0, the value IPFIX uses for "no VLAN". `direction` is `None`
 /// while the flow is accumulating and is filled in after drain.
 /// `first_seen_ms` / `last_seen_ms` are kernel packet timestamps (ms since
 /// UNIX epoch) from libpcap — emitted as IPFIX IE 152 / 153.
@@ -58,6 +60,7 @@ pub struct FlowVal {
     pub packets: u64,
     pub src_mac: Option<[u8; 6]>,
     pub dst_mac: Option<[u8; 6]>,
+    pub vlan_id: Option<u16>,
     pub direction: Option<FlowDirection>,
     pub first_seen_ms: u64,
     pub last_seen_ms: u64,
@@ -91,24 +94,40 @@ impl FlowTable {
         bytes: u64,
         src_mac: Option<[u8; 6]>,
         dst_mac: Option<[u8; 6]>,
+        vlan_id: Option<u16>,
         ts_ms: u64,
     ) {
         self.inner
             .entry(key)
             .and_modify(|val| {
-                val.bytes = val.bytes.saturating_add(bytes);
-                val.packets = val.packets.saturating_add(1);
-                if val.src_mac.is_none() {
-                    val.src_mac = src_mac;
+                let FlowVal {
+                    bytes: tot_bytes,
+                    packets: tot_packets,
+                    src_mac: known_src_mac,
+                    dst_mac: known_dst_mac,
+                    vlan_id: known_vlan_id,
+                    first_seen_ms,
+                    last_seen_ms,
+                    // only filled in after drain, by `with_direction`
+                    direction: _,
+                } = val;
+
+                *tot_bytes = tot_bytes.saturating_add(bytes);
+                *tot_packets = tot_packets.saturating_add(1);
+                if known_src_mac.is_none() {
+                    *known_src_mac = src_mac;
                 }
-                if val.dst_mac.is_none() {
-                    val.dst_mac = dst_mac;
+                if known_dst_mac.is_none() {
+                    *known_dst_mac = dst_mac;
                 }
-                if ts_ms < val.first_seen_ms {
-                    val.first_seen_ms = ts_ms;
+                if known_vlan_id.is_none() {
+                    *known_vlan_id = vlan_id;
                 }
-                if ts_ms > val.last_seen_ms {
-                    val.last_seen_ms = ts_ms;
+                if ts_ms < *first_seen_ms {
+                    *first_seen_ms = ts_ms;
+                }
+                if ts_ms > *last_seen_ms {
+                    *last_seen_ms = ts_ms;
                 }
             })
             .or_insert(FlowVal {
@@ -116,6 +135,7 @@ impl FlowTable {
                 packets: 1,
                 src_mac,
                 dst_mac,
+                vlan_id,
                 direction: None,
                 first_seen_ms: ts_ms,
                 last_seen_ms: ts_ms,
@@ -153,8 +173,8 @@ mod tests {
     fn record_accumulates_bytes_and_packets() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 100, Some([1; 6]), Some([2; 6]), 1_000);
-        table.record(k, 50, None, None, 2_500);
+        table.record(k, 100, Some([1; 6]), Some([2; 6]), Some(42), 1_000);
+        table.record(k, 50, None, None, None, 2_500);
 
         let flows = table.drain();
         assert_eq!(flows.len(), 1);
@@ -163,6 +183,7 @@ mod tests {
         assert_eq!(state.packets, 2);
         assert_eq!(state.src_mac, Some([1; 6]));
         assert_eq!(state.dst_mac, Some([2; 6]));
+        assert_eq!(state.vlan_id, Some(42));
         assert_eq!(state.first_seen_ms, 1_000);
         assert_eq!(state.last_seen_ms, 2_500);
     }
@@ -171,7 +192,7 @@ mod tests {
     fn drain_empties_the_table() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 100, None, None, 0);
+        table.record(k, 100, None, None, None, 0);
 
         let first = table.drain();
         assert_eq!(first.len(), 1);
@@ -184,10 +205,10 @@ mod tests {
     #[test]
     fn record_after_drain_creates_fresh_entry() {
         let mut table = FlowTable::new();
-        table.record(key(1, 2), 100, None, None, 0);
-        table.record(key(3, 4), 200, None, None, 0);
+        table.record(key(1, 2), 100, None, None, None, 0);
+        table.record(key(3, 4), 200, None, None, None, 0);
         let _ = table.drain();
-        table.record(key(3, 4), 50, None, None, 0);
+        table.record(key(3, 4), 50, None, None, None, 0);
 
         let flows = table.drain();
         assert_eq!(flows.len(), 1);
@@ -196,23 +217,24 @@ mod tests {
     }
 
     #[test]
-    fn record_does_not_clobber_existing_mac() {
+    fn record_does_not_clobber_existing_mac_or_vlan() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 100, Some([0xaa; 6]), Some([0xbb; 6]), 0);
-        table.record(k, 100, Some([0xcc; 6]), Some([0xdd; 6]), 0);
+        table.record(k, 100, Some([0xaa; 6]), Some([0xbb; 6]), Some(42), 0);
+        table.record(k, 100, Some([0xcc; 6]), Some([0xdd; 6]), Some(100), 0);
         let flows = table.drain();
         assert_eq!(flows[&k].src_mac, Some([0xaa; 6]));
         assert_eq!(flows[&k].dst_mac, Some([0xbb; 6]));
+        assert_eq!(flows[&k].vlan_id, Some(42));
     }
 
     #[test]
     fn record_first_and_last_track_min_max() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 1, None, None, 5_000);
-        table.record(k, 1, None, None, 3_000); // out-of-order earlier packet
-        table.record(k, 1, None, None, 7_000);
+        table.record(k, 1, None, None, None, 5_000);
+        table.record(k, 1, None, None, None, 3_000); // out-of-order earlier packet
+        table.record(k, 1, None, None, None, 7_000);
         let flows = table.drain();
         assert_eq!(flows[&k].first_seen_ms, 3_000);
         assert_eq!(flows[&k].last_seen_ms, 7_000);
@@ -288,6 +310,7 @@ mod tests {
             packets: 0,
             src_mac: None,
             dst_mac: None,
+            vlan_id: None,
             direction: None,
             first_seen_ms: 0,
             last_seen_ms: 0,
@@ -307,6 +330,7 @@ mod tests {
             packets: 0,
             src_mac: None,
             dst_mac: None,
+            vlan_id: None,
             direction: None,
             first_seen_ms: 0,
             last_seen_ms: 0,

@@ -1,8 +1,8 @@
 //! IPFIX template definitions (RFC 7011 §3.4.1).
 //!
 //! We define two templates with canonical IANA-registered IE lengths:
-//! - Template 256 carries IPv4 5-tuple + MACs + delta counters.
-//! - Template 257 carries IPv6 5-tuple + MACs + delta counters.
+//! - Template 256 carries IPv4 5-tuple + MACs + VLAN + delta counters.
+//! - Template 257 carries IPv6 5-tuple + MACs + VLAN + delta counters.
 //!
 //! Both templates are emitted together inside a single Template Set whenever a
 //! refresh is due (see `exporter.rs`).
@@ -22,9 +22,10 @@ const IE_FLOW_DIRECTION: u16 = 61;
 const IE_DESTINATION_MAC_ADDRESS: u16 = 80;
 const IE_FLOW_START_MILLISECONDS: u16 = 152;
 const IE_FLOW_END_MILLISECONDS: u16 = 153;
+const IE_DOT1Q_VLAN_ID: u16 = 243;
 const IE_LAYER2_OCTET_DELTA_COUNT: u16 = 352;
 
-const FIELD_COUNT: u16 = 12;
+const FIELD_COUNT: u16 = 13;
 const TEMPLATE_RECORD_LEN: u16 = 4 + FIELD_COUNT * 4;
 pub const TEMPLATE_SET_LEN: u16 = 4 + 2 * TEMPLATE_RECORD_LEN;
 
@@ -37,6 +38,7 @@ const V4_FIELDS: [(u16, u16); FIELD_COUNT as usize] = [
     (IE_PROTOCOL_IDENTIFIER, 1),
     (IE_SOURCE_MAC_ADDRESS, 6),
     (IE_DESTINATION_MAC_ADDRESS, 6),
+    (IE_DOT1Q_VLAN_ID, 2),
     (IE_FLOW_DIRECTION, 1),
     (IE_LAYER2_OCTET_DELTA_COUNT, 8),
     (IE_PACKET_DELTA_COUNT, 8),
@@ -52,6 +54,7 @@ const V6_FIELDS: [(u16, u16); FIELD_COUNT as usize] = [
     (IE_PROTOCOL_IDENTIFIER, 1),
     (IE_SOURCE_MAC_ADDRESS, 6),
     (IE_DESTINATION_MAC_ADDRESS, 6),
+    (IE_DOT1Q_VLAN_ID, 2),
     (IE_FLOW_DIRECTION, 1),
     (IE_LAYER2_OCTET_DELTA_COUNT, 8),
     (IE_PACKET_DELTA_COUNT, 8),
@@ -90,10 +93,10 @@ mod tests {
     /// ordering, the IE numbers, or the length encoding has drifted.
     #[rustfmt::skip]
     const EXPECTED: &[u8] = &[
-        // Set header: set_id=2, length=108
-        0x00, 0x02, 0x00, 0x6c,
-        // Template 256 header: template_id=256, field_count=12
-        0x01, 0x00, 0x00, 0x0c,
+        // Set header: set_id=2, length=116
+        0x00, 0x02, 0x00, 0x74,
+        // Template 256 header: template_id=256, field_count=13
+        0x01, 0x00, 0x00, 0x0d,
         // Template 256 fields: (IE, length) pairs
         0x00, 0x08, 0x00, 0x04, // IE 8 (srcIPv4), 4B
         0x00, 0x0c, 0x00, 0x04, // IE 12 (dstIPv4), 4B
@@ -102,13 +105,14 @@ mod tests {
         0x00, 0x04, 0x00, 0x01, // IE 4 (protocol), 1B
         0x00, 0x38, 0x00, 0x06, // IE 56 (srcMac), 6B
         0x00, 0x50, 0x00, 0x06, // IE 80 (DstMac), 6B
+        0x00, 0xf3, 0x00, 0x02, // IE 243 (dot1qVlanId), 2B
         0x00, 0x3d, 0x00, 0x01, // IE 61 (flowDirection), 1B
         0x01, 0x60, 0x00, 0x08, // IE 352 (layer2OctetDeltaCount), 8B
         0x00, 0x02, 0x00, 0x08, // IE 2 (packetDeltaCount), 8B
         0x00, 0x98, 0x00, 0x08, // IE 152 (flowStartMilliseconds), 8B
         0x00, 0x99, 0x00, 0x08, // IE 153 (flowEndMilliseconds), 8B
-        // Template 257 header: template_id=257, field_count=12
-        0x01, 0x01, 0x00, 0x0c,
+        // Template 257 header: template_id=257, field_count=13
+        0x01, 0x01, 0x00, 0x0d,
         // Template 257 fields
         0x00, 0x1b, 0x00, 0x10, // IE 27 (srcIPv6), 16B
         0x00, 0x1c, 0x00, 0x10, // IE 28 (dstIPv6), 16B
@@ -117,6 +121,7 @@ mod tests {
         0x00, 0x04, 0x00, 0x01, // IE 4 (protocol), 1B
         0x00, 0x38, 0x00, 0x06, // IE 56 (srcMac), 6B
         0x00, 0x50, 0x00, 0x06, // IE 80 (DstMac), 6B
+        0x00, 0xf3, 0x00, 0x02, // IE 243 (dot1qVlanId), 2B
         0x00, 0x3d, 0x00, 0x01, // IE 61 (flowDirection), 1B
         0x01, 0x60, 0x00, 0x08, // IE 352 (layer2OctetDeltaCount), 8B
         0x00, 0x02, 0x00, 0x08, // IE 2 (packetDeltaCount), 8B
@@ -128,7 +133,7 @@ mod tests {
     fn template_set_matches_spec_bytes() {
         let mut buf = Vec::new();
         write_template_set(&mut buf);
-        assert_eq!(buf.len(), 108);
+        assert_eq!(buf.len(), 116);
         assert_eq!(buf, EXPECTED);
     }
 }
