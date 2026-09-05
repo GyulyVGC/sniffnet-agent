@@ -32,7 +32,7 @@ pub struct FlowKey {
     pub addrs: FlowAddrs,
     pub src_port: Option<u16>,
     pub dst_port: Option<u16>,
-    pub protocol: u8,
+    pub protocol: Protocol,
 }
 
 impl FlowKey {
@@ -40,7 +40,7 @@ impl FlowKey {
     /// collector's address+port). Filtered out on the main thread so they
     /// don't appear in the exported stream.
     pub fn is_self_export(&self, collector: SocketAddr) -> bool {
-        Protocol::from_number(self.protocol) == Some(Protocol::Udp)
+        self.protocol == Protocol::Udp
             && self.addrs.dst() == collector.ip()
             && self.dst_port == Some(collector.port())
     }
@@ -50,8 +50,10 @@ impl FlowKey {
 /// carries no MACs or when no MAC has been observed yet for this flow; the
 /// encoder writes all-zero on the wire in that case. `vlan_id` is the
 /// outermost 802.1Q tag, `None` when the flow is untagged; the encoder then
-/// writes 0, the value IPFIX uses for "no VLAN". `direction` is `None`
-/// while the flow is accumulating and is filled in after drain.
+/// writes 0, the value IPFIX uses for "no VLAN". `ether_type` identifies the
+/// network layer protocol, and is the only thing marking an ARP flow apart
+/// from an IP one, since ARP has no IANA protocol number. `direction` is
+/// `None` while the flow is accumulating and is filled in after drain.
 /// `first_seen_ms` / `last_seen_ms` are kernel packet timestamps (ms since
 /// UNIX epoch) from libpcap — emitted as IPFIX IE 152 / 153.
 #[derive(Debug, Clone, Copy)]
@@ -61,6 +63,7 @@ pub struct FlowVal {
     pub src_mac: Option<[u8; 6]>,
     pub dst_mac: Option<[u8; 6]>,
     pub vlan_id: Option<u16>,
+    pub ether_type: u16,
     pub direction: Option<FlowDirection>,
     pub first_seen_ms: u64,
     pub last_seen_ms: u64,
@@ -88,15 +91,7 @@ impl FlowTable {
         }
     }
 
-    pub fn record(
-        &mut self,
-        key: FlowKey,
-        bytes: u64,
-        src_mac: Option<[u8; 6]>,
-        dst_mac: Option<[u8; 6]>,
-        vlan_id: Option<u16>,
-        ts_ms: u64,
-    ) {
+    pub fn record(&mut self, key: FlowKey, packet: FlowVal) {
         self.inner
             .entry(key)
             .and_modify(|val| {
@@ -108,38 +103,31 @@ impl FlowTable {
                     vlan_id: known_vlan_id,
                     first_seen_ms,
                     last_seen_ms,
+                    // determined by the key, so identical for every packet of the flow
+                    ether_type: _,
                     // only filled in after drain, by `with_direction`
                     direction: _,
                 } = val;
 
-                *tot_bytes = tot_bytes.saturating_add(bytes);
-                *tot_packets = tot_packets.saturating_add(1);
+                *tot_bytes = tot_bytes.saturating_add(packet.bytes);
+                *tot_packets = tot_packets.saturating_add(packet.packets);
                 if known_src_mac.is_none() {
-                    *known_src_mac = src_mac;
+                    *known_src_mac = packet.src_mac;
                 }
                 if known_dst_mac.is_none() {
-                    *known_dst_mac = dst_mac;
+                    *known_dst_mac = packet.dst_mac;
                 }
                 if known_vlan_id.is_none() {
-                    *known_vlan_id = vlan_id;
+                    *known_vlan_id = packet.vlan_id;
                 }
-                if ts_ms < *first_seen_ms {
-                    *first_seen_ms = ts_ms;
+                if packet.first_seen_ms < *first_seen_ms {
+                    *first_seen_ms = packet.first_seen_ms;
                 }
-                if ts_ms > *last_seen_ms {
-                    *last_seen_ms = ts_ms;
+                if packet.last_seen_ms > *last_seen_ms {
+                    *last_seen_ms = packet.last_seen_ms;
                 }
             })
-            .or_insert(FlowVal {
-                bytes,
-                packets: 1,
-                src_mac,
-                dst_mac,
-                vlan_id,
-                direction: None,
-                first_seen_ms: ts_ms,
-                last_seen_ms: ts_ms,
-            });
+            .or_insert(packet);
     }
 
     /// Hand the accumulated flow map off to the main thread. All post-processing
@@ -165,7 +153,27 @@ mod tests {
             },
             src_port: Some(1000 + u16::from(a)),
             dst_port: Some(443),
-            protocol: 6,
+            protocol: Protocol::Tcp,
+        }
+    }
+
+    fn val(
+        bytes: u64,
+        src_mac: Option<[u8; 6]>,
+        dst_mac: Option<[u8; 6]>,
+        vlan_id: Option<u16>,
+        ts_ms: u64,
+    ) -> FlowVal {
+        FlowVal {
+            bytes,
+            packets: 1,
+            src_mac,
+            dst_mac,
+            vlan_id,
+            ether_type: 0x0800,
+            direction: None,
+            first_seen_ms: ts_ms,
+            last_seen_ms: ts_ms,
         }
     }
 
@@ -173,8 +181,8 @@ mod tests {
     fn record_accumulates_bytes_and_packets() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 100, Some([1; 6]), Some([2; 6]), Some(42), 1_000);
-        table.record(k, 50, None, None, None, 2_500);
+        table.record(k, val(100, Some([1; 6]), Some([2; 6]), Some(42), 1_000));
+        table.record(k, val(50, None, None, None, 2_500));
 
         let flows = table.drain();
         assert_eq!(flows.len(), 1);
@@ -192,7 +200,7 @@ mod tests {
     fn drain_empties_the_table() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 100, None, None, None, 0);
+        table.record(k, val(100, None, None, None, 0));
 
         let first = table.drain();
         assert_eq!(first.len(), 1);
@@ -205,10 +213,10 @@ mod tests {
     #[test]
     fn record_after_drain_creates_fresh_entry() {
         let mut table = FlowTable::new();
-        table.record(key(1, 2), 100, None, None, None, 0);
-        table.record(key(3, 4), 200, None, None, None, 0);
+        table.record(key(1, 2), val(100, None, None, None, 0));
+        table.record(key(3, 4), val(200, None, None, None, 0));
         let _ = table.drain();
-        table.record(key(3, 4), 50, None, None, None, 0);
+        table.record(key(3, 4), val(50, None, None, None, 0));
 
         let flows = table.drain();
         assert_eq!(flows.len(), 1);
@@ -220,8 +228,8 @@ mod tests {
     fn record_does_not_clobber_existing_mac_or_vlan() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 100, Some([0xaa; 6]), Some([0xbb; 6]), Some(42), 0);
-        table.record(k, 100, Some([0xcc; 6]), Some([0xdd; 6]), Some(100), 0);
+        table.record(k, val(100, Some([0xaa; 6]), Some([0xbb; 6]), Some(42), 0));
+        table.record(k, val(100, Some([0xcc; 6]), Some([0xdd; 6]), Some(100), 0));
         let flows = table.drain();
         assert_eq!(flows[&k].src_mac, Some([0xaa; 6]));
         assert_eq!(flows[&k].dst_mac, Some([0xbb; 6]));
@@ -232,9 +240,9 @@ mod tests {
     fn record_first_and_last_track_min_max() {
         let mut table = FlowTable::new();
         let k = key(1, 2);
-        table.record(k, 1, None, None, None, 5_000);
-        table.record(k, 1, None, None, None, 3_000); // out-of-order earlier packet
-        table.record(k, 1, None, None, None, 7_000);
+        table.record(k, val(1, None, None, None, 5_000));
+        table.record(k, val(1, None, None, None, 3_000)); // out-of-order earlier packet
+        table.record(k, val(1, None, None, None, 7_000));
         let flows = table.drain();
         assert_eq!(flows[&k].first_seen_ms, 3_000);
         assert_eq!(flows[&k].last_seen_ms, 7_000);
@@ -254,11 +262,11 @@ mod tests {
             },
             src_port: Some(54321),
             dst_port: Some(collector_port),
-            protocol: 17,
+            protocol: Protocol::Udp,
         };
         // TCP to same dst:port — different protocol, no match
         let tcp_to_collector_port = FlowKey {
-            protocol: 6,
+            protocol: Protocol::Tcp,
             ..self_export
         };
         // UDP to different dst — no match
@@ -294,7 +302,7 @@ mod tests {
             },
             src_port: Some(40000),
             dst_port: Some(443),
-            protocol: 6,
+            protocol: Protocol::Tcp,
         };
         let incoming = FlowKey {
             addrs: FlowAddrs::V4 {
@@ -303,7 +311,7 @@ mod tests {
             },
             src_port: Some(443),
             dst_port: Some(40000),
-            protocol: 6,
+            protocol: Protocol::Tcp,
         };
         let val = FlowVal {
             bytes: 0,
@@ -311,6 +319,7 @@ mod tests {
             src_mac: None,
             dst_mac: None,
             vlan_id: None,
+            ether_type: 0x0800,
             direction: None,
             first_seen_ms: 0,
             last_seen_ms: 0,
@@ -331,6 +340,7 @@ mod tests {
             src_mac: None,
             dst_mac: None,
             vlan_id: None,
+            ether_type: 0x0800,
             direction: None,
             first_seen_ms: 0,
             last_seen_ms: 0,

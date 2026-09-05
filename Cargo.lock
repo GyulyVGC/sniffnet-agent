@@ -423,9 +423,7 @@ dependencies = [
 
 [[package]]
 name = "sniffnet-packet-parser"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66d793478952031116cdbde9feb5ceb4f5e94c6c0dfff2a4cb4c80d4000073af"
+version = "0.2.1"
 dependencies = [
  "etherparse",
  "pcap",
