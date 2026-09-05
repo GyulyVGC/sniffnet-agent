@@ -5,9 +5,9 @@
 //!
 //! ```text
 //! [Message Header (16B)]
-//! [Template Set (108B)]?      <-- only in the first datagram when refresh due
-//! [Data Set v4 (4B + N*60)]?  <-- present only if there are v4 records
-//! [Data Set v6 (4B + N*84)]?  <-- present only if there are v6 records
+//! [Template Set (124B)]?      <-- only in the first datagram when refresh due
+//! [Data Set v4 (4B + N*62)]?  <-- present only if there are v4 records
+//! [Data Set v6 (4B + N*86)]?  <-- present only if there are v6 records
 //! ```
 //!
 //! Sequence number semantics follow RFC 7011 §3.1 (cumulative count of Data
@@ -152,10 +152,12 @@ fn write_record(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
 fn write_common_tail(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
     out.extend_from_slice(&key.src_port.unwrap_or(0).to_be_bytes());
     out.extend_from_slice(&key.dst_port.unwrap_or(0).to_be_bytes());
-    out.push(key.protocol);
+    // ARP has no IANA protocol number; `ether_type` is what identifies it.
+    out.push(key.protocol.number().unwrap_or(0));
     out.extend_from_slice(&val.src_mac.unwrap_or([0; 6]));
     out.extend_from_slice(&val.dst_mac.unwrap_or([0; 6]));
     out.extend_from_slice(&val.vlan_id.unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&val.ether_type.to_be_bytes());
     out.push(match val.direction {
         Some(crate::direction::FlowDirection::Incoming) => 0x00,
         Some(crate::direction::FlowDirection::Outgoing) => 0x01,
@@ -170,6 +172,7 @@ fn write_common_tail(out: &mut Vec<u8>, key: &FlowKey, val: &FlowVal) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sniffnet_packet_parser::Protocol;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn v4_flow(a: u8, b: u8, bytes: u64, packets: u64) -> (FlowKey, FlowVal) {
@@ -181,7 +184,7 @@ mod tests {
                 },
                 src_port: Some(1000 + u16::from(a)),
                 dst_port: Some(443),
-                protocol: 6,
+                protocol: Protocol::Tcp,
             },
             FlowVal {
                 bytes,
@@ -189,6 +192,7 @@ mod tests {
                 src_mac: Some([0xaa; 6]),
                 dst_mac: Some([0xbb; 6]),
                 vlan_id: Some(42),
+                ether_type: 0x0800,
                 direction: None,
                 first_seen_ms: 0,
                 last_seen_ms: 0,
@@ -205,7 +209,7 @@ mod tests {
                 },
                 src_port: Some(5555),
                 dst_port: Some(80),
-                protocol: 17,
+                protocol: Protocol::Udp,
             },
             FlowVal {
                 bytes,
@@ -213,6 +217,7 @@ mod tests {
                 src_mac: None,
                 dst_mac: None,
                 vlan_id: None,
+                ether_type: 0x86DD,
                 direction: None,
                 first_seen_ms: 0,
                 last_seen_ms: 0,
@@ -234,8 +239,8 @@ mod tests {
         assert_eq!(out.len(), 1);
         let dg = &out[0];
         assert_eq!(dg[0..2], 0x000Au16.to_be_bytes(), "version");
-        // length back-patched: header(16) + data set header(4) + 1 v4 record(60) = 80
-        assert_eq!(u16::from_be_bytes([dg[2], dg[3]]), 80);
+        // length back-patched: header(16) + data set header(4) + 1 v4 record(62) = 82
+        assert_eq!(u16::from_be_bytes([dg[2], dg[3]]), 82);
         assert_eq!(dg[4..8], 0xDEADBEEFu32.to_be_bytes(), "export_time");
         assert_eq!(dg[8..12], 0x1122_3344u32.to_be_bytes(), "sequence");
         assert_eq!(dg[12..16], 0u32.to_be_bytes(), "odid");
@@ -278,7 +283,7 @@ mod tests {
             },
             src_port: Some(0xAABB),
             dst_port: Some(0x01BB),
-            protocol: 6,
+            protocol: Protocol::Tcp,
         };
         let val = FlowVal {
             bytes: 0x0102_0304_0506_0708,
@@ -286,6 +291,7 @@ mod tests {
             src_mac: Some([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
             dst_mac: Some([0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]),
             vlan_id: Some(42),
+            ether_type: 0x0800,
             direction: Some(crate::direction::FlowDirection::Outgoing),
             first_seen_ms: 0x1111_2222_3333_4444,
             last_seen_ms: 0x5555_6666_7777_8888,
@@ -302,14 +308,51 @@ mod tests {
         assert_eq!(rec[13..19], [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         assert_eq!(rec[19..25], [0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]);
         assert_eq!(rec[25..27], 42u16.to_be_bytes(), "dot1qVlanId");
-        assert_eq!(rec[27], 0x01, "flowDirection egress");
+        assert_eq!(rec[27..29], 0x0800u16.to_be_bytes(), "ethernetType");
+        assert_eq!(rec[29], 0x01, "flowDirection egress");
         assert_eq!(
-            rec[28..36],
+            rec[30..38],
             [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
         );
-        assert_eq!(rec[36..44], 0x00FFu64.to_be_bytes());
-        assert_eq!(rec[44..52], 0x1111_2222_3333_4444u64.to_be_bytes());
-        assert_eq!(rec[52..60], 0x5555_6666_7777_8888u64.to_be_bytes());
+        assert_eq!(rec[38..46], 0x00FFu64.to_be_bytes());
+        assert_eq!(rec[46..54], 0x1111_2222_3333_4444u64.to_be_bytes());
+        assert_eq!(rec[54..62], 0x5555_6666_7777_8888u64.to_be_bytes());
+    }
+
+    #[test]
+    fn arp_record_byte_layout() {
+        // ARP rides the v4 template: no ports, no IANA protocol number, and
+        // `ethernetType` left to say what the record actually is
+        let key = FlowKey {
+            addrs: FlowAddrs::V4 {
+                src: Ipv4Addr::new(192, 168, 1, 10),
+                dst: Ipv4Addr::new(192, 168, 1, 1),
+            },
+            src_port: None,
+            dst_port: None,
+            protocol: Protocol::Arp,
+        };
+        let val = FlowVal {
+            bytes: 42,
+            packets: 1,
+            src_mac: Some([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
+            dst_mac: Some([0xFF; 6]),
+            vlan_id: None,
+            ether_type: 0x0806,
+            direction: Some(crate::direction::FlowDirection::Outgoing),
+            first_seen_ms: 0,
+            last_seen_ms: 0,
+        };
+        let (out, _) = build_datagrams(&[(key, val)], 0, false, 0, 0);
+        let dg = &out[0];
+        // Skip 16B header + 4B data set header = 20B prefix.
+        let rec = &dg[20..20 + usize::from(RECORD_SIZE_V4)];
+        assert_eq!(rec[0..4], [192, 168, 1, 10]);
+        assert_eq!(rec[4..8], [192, 168, 1, 1]);
+        assert_eq!(rec[8..10], [0x00, 0x00], "srcPort absent");
+        assert_eq!(rec[10..12], [0x00, 0x00], "dstPort absent");
+        assert_eq!(rec[12], 0, "protocolIdentifier: ARP has no IANA number");
+        assert_eq!(rec[27..29], 0x0806u16.to_be_bytes(), "ethernetType");
     }
 
     #[test]
@@ -320,7 +363,7 @@ mod tests {
             addrs: FlowAddrs::V6 { src, dst },
             src_port: Some(0xAABB),
             dst_port: Some(0x01BB),
-            protocol: 17,
+            protocol: Protocol::Udp,
         };
         let val = FlowVal {
             bytes: 0x0102_0304_0506_0708,
@@ -328,6 +371,7 @@ mod tests {
             src_mac: Some([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
             dst_mac: Some([0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]),
             vlan_id: None,
+            ether_type: 0x86DD,
             direction: Some(crate::direction::FlowDirection::Incoming),
             first_seen_ms: 0x1111_2222_3333_4444,
             last_seen_ms: 0x5555_6666_7777_8888,
@@ -344,11 +388,12 @@ mod tests {
         assert_eq!(rec[37..43], [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         assert_eq!(rec[43..49], [0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]);
         assert_eq!(rec[49..51], [0x00, 0x00], "dot1qVlanId");
-        assert_eq!(rec[51], 0x00, "flowDirection ingress");
-        assert_eq!(rec[52..60], 0x0102_0304_0506_0708u64.to_be_bytes());
-        assert_eq!(rec[60..68], 0x00FFu64.to_be_bytes());
-        assert_eq!(rec[68..76], 0x1111_2222_3333_4444u64.to_be_bytes());
-        assert_eq!(rec[76..84], 0x5555_6666_7777_8888u64.to_be_bytes());
+        assert_eq!(rec[51..53], 0x86DDu16.to_be_bytes(), "ethernetType");
+        assert_eq!(rec[53], 0x00, "flowDirection ingress");
+        assert_eq!(rec[54..62], 0x0102_0304_0506_0708u64.to_be_bytes());
+        assert_eq!(rec[62..70], 0x00FFu64.to_be_bytes());
+        assert_eq!(rec[70..78], 0x1111_2222_3333_4444u64.to_be_bytes());
+        assert_eq!(rec[78..86], 0x5555_6666_7777_8888u64.to_be_bytes());
     }
 
     #[test]
@@ -360,7 +405,7 @@ mod tests {
             },
             src_port: Some(1234),
             dst_port: Some(80),
-            protocol: 6,
+            protocol: Protocol::Tcp,
         };
         let make = |dir| FlowVal {
             bytes: 1,
@@ -368,6 +413,7 @@ mod tests {
             src_mac: None,
             dst_mac: None,
             vlan_id: None,
+            ether_type: 0x0800,
             direction: dir,
             first_seen_ms: 0,
             last_seen_ms: 0,
@@ -379,8 +425,8 @@ mod tests {
         ];
         for (dir, expected) in cases {
             let (out, _) = build_datagrams(&[(key, make(dir))], 0, false, 0, 0);
-            // Byte offset for flowDirection: header(16) + set hdr(4) + 4+4+2+2+1+6+6+2 = 47.
-            assert_eq!(out[0][47], expected, "dir {:?}", dir);
+            // Byte offset for flowDirection: header(16) + set hdr(4) + 4+4+2+2+1+6+6+2+2 = 49.
+            assert_eq!(out[0][49], expected, "dir {:?}", dir);
         }
     }
 
@@ -393,7 +439,7 @@ mod tests {
 
     #[test]
     fn sequence_number_carries_across_messages() {
-        // At mtu=1200 a no-template datagram fits floor((1200 - 16 - 4) / 60) = 19 v4
+        // At mtu=1200 a no-template datagram fits floor((1200 - 16 - 4) / 62) = 19 v4
         // records. 67 records therefore splits into 19 + 19 + 19 + 10 across four datagrams.
         let flows: Vec<_> = (0..67)
             .map(|i| v4_flow((i % 250) as u8, ((i + 1) % 250) as u8, 100, 1))
@@ -480,7 +526,7 @@ mod tests {
         let (out, _) = build_datagrams(&flows, 0, false, 0, 0);
         assert_eq!(out.len(), 1);
         let dg = &out[0];
-        // After 16B header: v4 data set (4 + 60 = 64B) then v6 data set (4 + 84 = 88B)
+        // After 16B header: v4 data set (4 + 62 = 66B) then v6 data set (4 + 86 = 90B)
         let first_set_id = u16::from_be_bytes([dg[16], dg[17]]);
         let first_set_len = u16::from_be_bytes([dg[18], dg[19]]);
         assert_eq!(first_set_id, TEMPLATE_ID_V4);

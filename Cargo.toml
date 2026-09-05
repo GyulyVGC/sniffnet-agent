@@ -33,7 +33,7 @@ clap = { version = "4.6.6", features = ["derive"] }
 pcap = "2.5.0"
 log = "0.4.34"
 jiff = "0.2.35"
-sniffnet-packet-parser = "0.2.0"
+sniffnet-packet-parser = "0.2.1"
 
 [profile.release]
 opt-level = 3

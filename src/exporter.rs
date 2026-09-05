@@ -70,6 +70,7 @@ fn unix_seconds() -> u32 {
 mod tests {
     use super::*;
     use crate::flow::{FlowAddrs, FlowKey};
+    use sniffnet_packet_parser::Protocol;
     use std::net::Ipv4Addr;
 
     fn flow(a: u8) -> (FlowKey, FlowVal) {
@@ -81,7 +82,7 @@ mod tests {
                 },
                 src_port: Some(1000 + u16::from(a)),
                 dst_port: Some(443),
-                protocol: 6,
+                protocol: Protocol::Tcp,
             },
             FlowVal {
                 bytes: 100,
@@ -89,6 +90,7 @@ mod tests {
                 src_mac: None,
                 dst_mac: None,
                 vlan_id: None,
+                ether_type: 0x0800,
                 direction: None,
                 first_seen_ms: 0,
                 last_seen_ms: 0,
@@ -109,15 +111,15 @@ mod tests {
 
         let mut buf = [0u8; 2048];
         let (n, _) = recv.recv_from(&mut buf).unwrap();
-        // first datagram: header(16) + template set(116) + data set(4 + 60) = 196
-        assert_eq!(n, 196);
+        // first datagram: header(16) + template set(124) + data set(4 + 62) = 206
+        assert_eq!(n, 206);
         // set after header should be the Template Set (id=2)
         assert_eq!(u16::from_be_bytes([buf[16], buf[17]]), 2);
 
         exp.flush(&vec![flow(2)]).unwrap();
         let (n2, _) = recv.recv_from(&mut buf).unwrap();
-        // second datagram should NOT include templates: 16 + 4 + 60 = 80
-        assert_eq!(n2, 80);
+        // second datagram should NOT include templates: 16 + 4 + 62 = 82
+        assert_eq!(n2, 82);
         assert_eq!(u16::from_be_bytes([buf[16], buf[17]]), 256);
     }
 
