@@ -8,14 +8,6 @@ use crate::flow::{FlowAddrs, FlowKey, FlowTable, FlowVal};
 use pcap::{Active, Capture};
 use sniffnet_packet_parser::{LinkType, ParsedPacket};
 
-struct Decoded {
-    key: FlowKey,
-    bytes: u64,
-    src_mac: Option<[u8; 6]>,
-    dst_mac: Option<[u8; 6]>,
-    vlan_id: Option<u16>,
-}
-
 pub fn open(cfg: &Config) -> Result<(Capture<Active>, LinkType), pcap::Error> {
     let cap = open_capture(cfg)?;
     let link_type = LinkType::from_pcap(cap.get_datalink());
@@ -48,12 +40,12 @@ pub fn run(mut cap: Capture<Active>, link_type: LinkType, tx: &Sender<HashMap<Fl
 
         match cap.next_packet() {
             Ok(packet) => {
-                if let Some(d) = decode_packet(packet.data, link_type) {
-                    let ts = packet.header.ts;
-                    #[allow(clippy::useless_conversion)]
-                    let ts_ms = u64::from(ts.tv_sec.cast_unsigned()).saturating_mul(1_000)
-                        + u64::from(ts.tv_usec.cast_unsigned()) / 1_000;
-                    table.record(d.key, d.bytes, d.src_mac, d.dst_mac, d.vlan_id, ts_ms);
+                let ts = packet.header.ts;
+                #[allow(clippy::useless_conversion)]
+                let ts_ms = u64::from(ts.tv_sec.cast_unsigned()).saturating_mul(1_000)
+                    + u64::from(ts.tv_usec.cast_unsigned()) / 1_000;
+                if let Some((key, val)) = decode_packet(packet.data, link_type, ts_ms) {
+                    table.record(key, val);
                 }
             }
             Err(pcap::Error::TimeoutExpired) => {}
@@ -81,13 +73,14 @@ fn open_capture(cfg: &Config) -> Result<Capture<Active>, pcap::Error> {
     Ok(cap)
 }
 
-fn decode_packet(data: &[u8], link_type: LinkType) -> Option<Decoded> {
+fn decode_packet(data: &[u8], link_type: LinkType, ts_ms: u64) -> Option<(FlowKey, FlowVal)> {
     let parsed = ParsedPacket::from_bytes(data, link_type)?;
 
     let src_mac = parsed.link_info.src_mac;
     let dst_mac = parsed.link_info.dst_mac;
     let vlan_id = parsed.link_info.vlan_id;
 
+    let ether_type = parsed.net_info.ether_type;
     let src_ip = parsed.net_info.src_ip;
     let dst_ip = parsed.net_info.dst_ip;
     let addrs = match (src_ip, dst_ip) {
@@ -98,20 +91,28 @@ fn decode_packet(data: &[u8], link_type: LinkType) -> Option<Decoded> {
 
     let src_port = parsed.transport_info.src_port;
     let dst_port = parsed.transport_info.dst_port;
-    let protocol = parsed.transport_info.protocol.number()?;
+    let protocol = parsed.transport_info.protocol;
 
     let bytes = parsed.bytes_count() as u64;
 
-    Some(Decoded {
-        key: FlowKey {
+    Some((
+        FlowKey {
             addrs,
             src_port,
             dst_port,
             protocol,
         },
-        bytes,
-        src_mac,
-        dst_mac,
-        vlan_id,
-    })
+        FlowVal {
+            bytes,
+            packets: 1,
+            src_mac,
+            dst_mac,
+            vlan_id,
+            ether_type,
+            // set later
+            direction: None,
+            first_seen_ms: ts_ms,
+            last_seen_ms: ts_ms,
+        },
+    ))
 }

@@ -1,8 +1,3 @@
-// TODO: ARP support
-// TODO: ICMP message types
-// TODO: IGMP message types
-// TODO: dropped packets
-
 mod capture;
 mod cli;
 mod direction;

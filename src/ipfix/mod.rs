@@ -11,12 +11,12 @@ pub const TEMPLATE_ID_V6: u16 = 257;
 pub const MSG_HEADER_LEN: u16 = 16;
 
 /// Canonical record size for the IPv4 flow template.
-/// 4 + 4 + 2 + 2 + 1 + 6 + 6 + 2 + 1 + 8 + 8 + 8 + 8 = 60
-pub const RECORD_SIZE_V4: u16 = 60;
+/// 4 + 4 + 2 + 2 + 1 + 6 + 6 + 2 + 2 + 1 + 8 + 8 + 8 + 8 = 62
+pub const RECORD_SIZE_V4: u16 = 62;
 
 /// Canonical record size for the IPv6 flow template.
-/// 16 + 16 + 2 + 2 + 1 + 6 + 6 + 2 + 1 + 8 + 8 + 8 + 8 = 84
-pub const RECORD_SIZE_V6: u16 = 84;
+/// 16 + 16 + 2 + 2 + 1 + 6 + 6 + 2 + 2 + 1 + 8 + 8 + 8 + 8 = 86
+pub const RECORD_SIZE_V6: u16 = 86;
 
 /// Set header length per RFC 7011 §3.3.
 pub const SET_HEADER_LEN: u16 = 4;
