@@ -1,10 +1,5 @@
 # sniffnet-agent
 
-> [!WARNING]
-> 
-> `sniffnet-agent` isn't yet supported by Sniffnet and is still in early development. <br>
-> Stay tuned for updates!
-
 [//]: # ([![Stars]&#40;https://img.shields.io/github/stars/GyulyVGC/listeners?logo=github&style=flat&#41;]&#40;https://github.com/GyulyVGC/listeners&#41;)
 [//]: # ([![Downloads]&#40;https://img.shields.io/crates/d/listeners.svg&#41;]&#40;https://crates.io/crates/listeners&#41;)
 [//]: # ([![Codecov]&#40;https://codecov.io/gh/GyulyVGC/listeners/graph/badge.svg?token=GSDVTT75C2&#41;]&#40;https://codecov.io/gh/GyulyVGC/listeners&#41;)
@@ -25,16 +20,56 @@ single Sniffnet instance that aggregates and visualizes activity across your
 whole network from one place.
 
 Any IPFIX exporter can feed Sniffnet, but `sniffnet-agent` is built for maximum compatibility:
-it emits exactly the Information Elements (IEs) Sniffnet needs, allowing to export only the required data at the
+it emits exactly the Information Elements (IEs) Sniffnet needs, exporting only the required data at the
 expected rate, without having to configure a more complex exporter to do so.
 
-[//]: # (## Install)
+## Installation
 
-[//]: # (```sh)
-[//]: # (cargo install sniffnet-agent)
-[//]: # (```)
+> [!NOTE]
+>
+> A working `libpcap` (or `Npcap` on Windows) installation is required.
 
-[//]: # (A working `libpcap` &#40;or `Npcap` on Windows&#41; installation is required.)
+<table>
+  <tr>
+    <td>
+      <picture><img alt="Windows" title="Windows" height="85px" src="https://raw.githubusercontent.com/GyulyVGC/sniffnet-agent/main/resources/repository/badges/windows.svg"/></picture>
+    </td>
+    <td>
+      <a href="https://github.com/GyulyVGC/sniffnet-agent/releases/latest/download/sniffnet-agent-windows-x86_64.zip">x86_64</a>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <picture><img alt="macOS" title="macOS" height="85px" src="https://raw.githubusercontent.com/GyulyVGC/sniffnet-agent/main/resources/repository/badges/macos.svg"/></picture>
+    </td>
+    <td>
+      <a href="https://github.com/GyulyVGC/sniffnet-agent/releases/latest/download/sniffnet-agent-macos-x86_64.tar.gz">Intel</a> | <a href="https://github.com/GyulyVGC/sniffnet-agent/releases/latest/download/sniffnet-agent-macos-aarch64.tar.gz">Apple silicon</a>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <picture><img alt="Linux" title="Linux" height="85px" src="https://raw.githubusercontent.com/GyulyVGC/sniffnet-agent/main/resources/repository/badges/linux.svg"/></picture>
+    </td>
+    <td>
+      <a href="https://github.com/GyulyVGC/sniffnet-agent/releases/latest/download/sniffnet-agent-linux-x86_64.tar.gz">x86_64</a> | <a href="https://github.com/GyulyVGC/sniffnet-agent/releases/latest/download/sniffnet-agent-linux-aarch64.tar.gz">ARM64</a>
+    </td>
+  </tr>
+</table>
+
+The links above download the latest prebuilt binaries directly from
+[GitHub releases](https://github.com/GyulyVGC/sniffnet-agent/releases).
+
+Alternatively, install `sniffnet-agent` from crates.io:
+
+```sh
+cargo install sniffnet-agent
+```
+
+Or pull the Docker image from GitHub Container Registry (only works on Linux):
+
+```sh
+docker pull ghcr.io/gyulyvgc/sniffnet-agent:latest
+```
 
 ## Usage
 
@@ -43,6 +78,16 @@ sniffnet-agent --interface <IFACE> --collector <HOST:PORT>
 ```
 
 Run with no arguments to be prompted interactively for the interface and collector.
+
+If running via Docker, the container needs access to the host network namespace and packet-capture
+capabilities in order to inspect host interfaces:
+
+```sh
+docker run --network host \
+  --cap-add NET_RAW --cap-add NET_ADMIN \
+  ghcr.io/gyulyvgc/sniffnet-agent:latest \
+  --interface <IFACE> --collector <HOST:PORT>
+```
 
 ### Options
 
