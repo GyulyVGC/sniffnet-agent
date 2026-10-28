@@ -1,52 +1,52 @@
-#name: Docker
-#
-#on:
-#  workflow_dispatch:
-#
-#jobs:
-#  docker:
-#    name: Docker Build
-#    runs-on: ubuntu-latest
-#    permissions:
-#      contents: read
-#      packages: write
-#    steps:
-#      - name: Checkout
-#        uses: actions/checkout@v6
-#
-#      - name: Extract version from Cargo.toml
-#        id: cargo-version
-#        run: |
-#          VERSION=v$(grep -m1 "^version" Cargo.toml | cut -d'"' -f2)
-#          echo "VERSION=$VERSION" >> $GITHUB_ENV
-#          echo "version=$VERSION" >> $GITHUB_OUTPUT
-#
-#      - name: Check there is no existing image with the same version
-#        run: |
-#          if docker manifest inspect ghcr.io/gyulyvgc/sniffnet:${{ env.VERSION }}; then
-#            echo "Image with version ${{ env.VERSION }} already exists"
-#            exit 1
-#          fi
-#
-#      - name: Set up QEMU
-#        uses: docker/setup-qemu-action@v4
-#
-#      - name: Set up Docker Buildx
-#        uses: docker/setup-buildx-action@v4
-#
-#      - name: Login to GitHub Container Registry
-#        uses: docker/login-action@v4
-#        with:
-#          registry: ghcr.io
-#          username: GyulyVGC
-#          password: ${{ secrets.GITHUB_TOKEN }}
-#
-#      - name: Build and push
-#        uses: docker/build-push-action@v7
-#        with:
-#          context: .
-#          platforms: linux/amd64
-#          push: true
-#          tags: |
-#            ghcr.io/gyulyvgc/sniffnet:latest
-#            ghcr.io/gyulyvgc/sniffnet:${{ env.VERSION }}
+name: Docker
+
+on:
+  workflow_dispatch:
+
+jobs:
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Extract version from Cargo.toml
+        id: cargo-version
+        run: |
+          VERSION=v$(grep -m1 "^version" Cargo.toml | cut -d'"' -f2)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check there is no existing image with the same version
+        run: |
+          if docker manifest inspect ghcr.io/gyulyvgc/sniffnet-agent:${{ env.VERSION }}; then
+            echo "Image with version ${{ env.VERSION }} already exists"
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: GyulyVGC
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/gyulyvgc/sniffnet-agent:latest
+            ghcr.io/gyulyvgc/sniffnet-agent:${{ env.VERSION }}
