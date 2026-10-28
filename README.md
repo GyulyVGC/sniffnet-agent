@@ -1,10 +1,5 @@
 # sniffnet-agent
 
-> [!WARNING]
-> 
-> `sniffnet-agent` isn't yet supported by Sniffnet and is still in early development. <br>
-> Stay tuned for updates!
-
 [//]: # ([![Stars]&#40;https://img.shields.io/github/stars/GyulyVGC/listeners?logo=github&style=flat&#41;]&#40;https://github.com/GyulyVGC/listeners&#41;)
 [//]: # ([![Downloads]&#40;https://img.shields.io/crates/d/listeners.svg&#41;]&#40;https://crates.io/crates/listeners&#41;)
 [//]: # ([![Codecov]&#40;https://codecov.io/gh/GyulyVGC/listeners/graph/badge.svg?token=GSDVTT75C2&#41;]&#40;https://codecov.io/gh/GyulyVGC/listeners&#41;)
