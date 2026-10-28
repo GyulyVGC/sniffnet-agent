@@ -73,8 +73,6 @@ jobs:
           mkdir -p "dist/${BUNDLE}"
           cp "target/${{ matrix.target }}/release/sniffnet-agent" "dist/${BUNDLE}/"
           cp CHANGELOG.md LICENSE-APACHE LICENSE-MIT README.md "dist/${BUNDLE}/"
-          mkdir -p "dist/${BUNDLE}/resources/repository/badges"
-          cp resources/repository/badges/*.svg "dist/${BUNDLE}/resources/repository/badges/"
           tar -C dist -czf "dist/${{ matrix.archive }}.tar.gz" "${BUNDLE}"
 
       - name: Create Windows archive
@@ -86,9 +84,6 @@ jobs:
           New-Item -ItemType Directory -Path $bundle -Force
           Copy-Item "target/${{ matrix.target }}/release/sniffnet-agent.exe" $bundle
           Copy-Item CHANGELOG.md, LICENSE-APACHE, LICENSE-MIT, README.md $bundle
-          $badgeDir = "$bundle/resources/repository/badges"
-          New-Item -ItemType Directory -Path $badgeDir -Force
-          Copy-Item "resources/repository/badges/*.svg" $badgeDir
           Compress-Archive -Path "$bundle/*" -DestinationPath "dist/${{ matrix.archive }}.zip"
 
       - name: Upload archive
