@@ -1,10 +1,8 @@
 # sniffnet-agent
 
-[//]: # ([![Stars]&#40;https://img.shields.io/github/stars/GyulyVGC/listeners?logo=github&style=flat&#41;]&#40;https://github.com/GyulyVGC/listeners&#41;)
-[//]: # ([![Downloads]&#40;https://img.shields.io/crates/d/listeners.svg&#41;]&#40;https://crates.io/crates/listeners&#41;)
-[//]: # ([![Codecov]&#40;https://codecov.io/gh/GyulyVGC/listeners/graph/badge.svg?token=GSDVTT75C2&#41;]&#40;https://codecov.io/gh/GyulyVGC/listeners&#41;)
-[//]: # ([![CI]&#40;https://github.com/sniffnet/sniffnet-agent/workflows/rust/badge.svg&#41;]&#40;https://github.com/sniffnet/sniffnet-agent/actions/&#41;)
-[//]: # ([![Crates]&#40;https://img.shields.io/crates/v/sniffnet-agent?&logo=rust&#41;]&#40;https://crates.io/crates/sniffnet-agent&#41;)
+[![Stars](https://img.shields.io/github/stars/GyulyVGC/sniffnet-agent?logo=github&style=flat)](https://github.com/GyulyVGC/sniffnet-agent)
+[![CI](https://github.com/GyulyVGC/sniffnet-agent/actions/workflows/rust.yml/badge.svg)](https://github.com/GyulyVGC/sniffnet-agent/actions/workflows/rust.yml)
+[![Crates](https://img.shields.io/crates/v/sniffnet-agent?&logo=rust)](https://crates.io/crates/sniffnet-agent)
 
 Lightweight network flows exporter compatible with [Sniffnet](https://github.com/GyulyVGC/sniffnet).
 
@@ -43,7 +41,7 @@ expected rate, without having to configure a more complex exporter to do so.
       <picture><img alt="macOS" title="macOS" height="85px" src="https://raw.githubusercontent.com/GyulyVGC/sniffnet-agent/main/resources/repository/badges/macos.svg"/></picture>
     </td>
     <td>
-      <a href="https://github.com/GyulyVGC/sniffnet-agent/releases/latest/download/sniffnet-agent-macos-x86_64.tar.gz">Intel</a> | <a href="https://github.com/GyulyVGC/sniffnet-agent/releases/latest/download/sniffnet-agent-macos-aarch64.tar.gz">Apple silicon</a>
+      <a href="https://github.com/GyulyVGC/sniffnet-agent/releases/latest/download/sniffnet-agent-macos-aarch64.tar.gz">Apple silicon</a> | <a href="https://github.com/GyulyVGC/sniffnet-agent/releases/latest/download/sniffnet-agent-macos-x86_64.tar.gz">Intel</a>
     </td>
   </tr>
   <tr>
